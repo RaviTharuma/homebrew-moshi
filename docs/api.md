@@ -324,8 +324,8 @@ The HTTP gateway serves diff and bounded control actions for servers surfaced by
 ### `GET /events`
 
 Opens the local WebSocket carrying the current terminal context and discovered
-servers. For a working agent in Herdr, the context may include a replaceable,
-non-persisted terminal preview:
+servers. For a working agent in Herdr or tmux, the context may include a
+replaceable, non-persisted terminal preview:
 
 ```jsonc
 {
@@ -349,9 +349,12 @@ non-persisted terminal preview:
 
 `ephemeral` is current display state, not a transcript message. Clients replace
 it on each context update and discard it when the agent stops working. The
-gateway reads plain visible terminal text, compares the last ten rows, and
-polls for the latest changed row every 250 ms. It intentionally omits Herdr's
-`--lines` option so the preview also works with versions before 0.7.5.
+gateway polls terminal text every 250 ms. Herdr previews compare the last ten
+visible rows and publish the latest changed row. Tmux previews inspect the last
+ten non-empty rows from the live pane buffer, scan upward, and publish the
+newest trusted agent status line. If no trusted tmux line is present, clients
+keep showing their generic Working label. Herdr reads intentionally omit the
+`--lines` option so previews also work with versions before 0.7.5.
 
 When a blocked agent is showing a numbered plan-decision menu, `agent` may
 also contain `planMenu`. Its title and option labels are extracted from that
