@@ -109,7 +109,7 @@ File-backed storage writes secrets to `~/.config/moshi/secrets.json` with `0600`
 | `MOSHI_HERDR_PATH` | Absolute path to the `herdr` CLI when a service manager cannot discover it from `PATH`. |
 | `MOSHI_HOOK_CDN` | CDN base URL for `update` downloads. |
 | `MOSHI_HOOK_GATEWAY_LISTEN` | Override the host gateway listen address. |
-| `MOSHI_STATE_DIR` / `MOSHI_CONFIG_DIR` | Override state/config dirs. |
+| `MOSHI_STATE_DIR` / `MOSHI_CONFIG_DIR` | Override state/config dirs. On macOS either override also isolates the secret store: pairing secrets come from `secrets.json` inside that dir instead of the login Keychain, so a scratch or e2e daemon starts unpaired rather than inheriting the real host's identity. Run `pair --store keychain` in that dir to opt back in. |
 | `MOSHI_HOOK_CONFIG_DIR` | Override the config dir for `config.toml` gateway settings. |
 | `CLAUDE_CONFIG_DIR` | Override the Claude Code profile used by hook install/status/uninstall; active hooked sessions also register this profile for Chat View, usage, and account labels. |
 | `CODEX_HOME` | Override Codex config dir for hook install/status/uninstall. |

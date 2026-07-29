@@ -84,16 +84,34 @@ server or command notifications are not surfaced.
 
 ### Grok Build
 
+Requires the Moshi app 3.10.2 or newer.
+
 Grok Build follows the same broad behavior as Claude-compatible hooks:
 
 | Agent behavior | Moshi behavior |
 | --- | --- |
 | Session starts | Stored silently until the first prompt |
 | User submits a prompt | Publishes or updates `session_started` |
-| Permission request | Publishes `approval_required` |
+| Permission request | Publishes only after the daemon verifies Grok parked on a human; Moshi can then approve once or reject through the native UI |
 | Agent stops | Publishes `task_complete` |
 | Session ends | Publishes `session_ended` to clear active running state |
-| Tool activity | Supported only when explicitly enabled |
+| Agent asks the user a question | Publishes `approval_required`; Chat View can submit supported choices through the verified TUI bridge |
+| Tool activity | Broad `PreToolUse` detects permission panels; auto-approved tools are discarded before publication, while `PostToolUse` stays targeted to `ask_user_question` |
+
+Grok's hook protocol has no permission event — `PreToolUse` fires for every
+tool, before the permission system decides — so a candidate is verified against
+`events.jsonl`, the lifecycle log Grok writes beside its ACP transcript. A
+`permission_requested` with nothing after it means a human is being waited on;
+an auto-approved tool records `permission_resolved` in the same millisecond.
+Panes are the fallback when no log is readable. Verification runs off the
+socket handler because Grok holds the tool until `PreToolUse` hooks return: the
+hook waits on its ack, so waiting for the panel before acking would deadlock
+against the very prompt being waited for. The same log makes a session report
+`blocked` while the panel is up, without scraping the pane.
+
+Grok's first permission option enables always-approve mode. Moshi never sends
+that shortcut: remote approve selects option 2 (`Yes, proceed`), while deny
+selects option 3.
 
 ### OMP (Oh My Pi)
 

@@ -16,7 +16,7 @@ Approval round-trip across all four components. Numbers reference the steps belo
   user's host                                 cloud                user's phone
 
   +------------+
-  | coding     |  Claude / Codex / OpenCode / Pi / OMP / Kimi
+  | coding     |  Claude / Codex / Grok / OpenCode / Pi / OMP / Kimi
   | agent      |
   +-----+------+
         | (1) hook fires; agent spawns short-lived subprocess
@@ -386,8 +386,8 @@ Diff sessions expire after 15 minutes idle and are served under `/apps/diff/:ses
 
 ### `POST /v1/questions/answer`
 
-Submits a complete Chat View answer form to the live Claude Code, Codex, Kimi,
-Pi, OMP, or OpenCode terminal prompt in tmux, Zellij, or Herdr. The request
+Submits a complete Chat View answer form to the live Claude Code, Codex, Grok
+Build, Kimi, Pi, OMP, or OpenCode terminal prompt in tmux, Zellij, or Herdr. The request
 uses the same SSH/Mosh/ET session query parameters as `/events`. The daemon
 re-resolves the multiplexer pane and checks the agent name, agent session id,
 first question, option labels, and native TUI prompt markers before injecting
@@ -418,8 +418,8 @@ verifying the focused pane.
 ### `POST /v1/plans/answer`
 
 Selects one option from a live ExitPlanMode / plan-review menu through the
-same verified TUI bridge. It supports every Chat View transcript source:
-Claude Code, Codex, Kimi, Pi, OMP, and OpenCode. The app sends the complete
+same verified TUI bridge. It supports Claude Code, Codex, Kimi, Pi, OMP, and
+OpenCode. The app sends the complete
 visible menu and the plan markdown, not a raw key. The daemon verifies the
 agent session, menu title, every numbered option label, and a visible
 fingerprint from the plan before it selects anything.
@@ -448,17 +448,17 @@ sequence, paced as separate terminal events so redraws cannot swallow input.
 A stale plan, changed menu, or different agent session returns `409`; an
 unavailable pane also fails without sending a partial decision.
 
-### `GET /v1/transcripts?session=<id>[&source=claude|codex|opencode|pi|omp|kimi]`
+### `GET /v1/transcripts?session=<id>[&source=claude|codex|grok|opencode|pi|omp|kimi]`
 
-Opens a local WebSocket stream for a live agent transcript. New clients should pass `source`; when omitted for backward compatibility, the gateway tries Claude first, then Codex. Claude transcripts prefer the exact per-session path captured from hook events (including `CLAUDE_CONFIG_DIR` profiles), then fall back to `~/.claude/projects` for older session state. Codex transcripts are resolved from `$CODEX_HOME/sessions` or `~/.codex/sessions` rollout files. Pi and OMP transcripts use the exact JSONL path reported by the installed extension, so profiles and custom session locations work without a directory scan. OMP validation understands its v3 fixed-width title slot before the session header. Kimi transcripts resolve through its profile-aware `session_index.jsonl` and stream the main agent's live `wire.jsonl`. OpenCode is proxied through the live local server recorded by its plugin. Transcript bytes stay on the host and are streamed only over the local forwarded gateway. If Codex resume creates a newer rollout for the same session id, reconnect to resolve the newest file.
+Opens a local WebSocket stream for a live agent transcript. New clients should pass `source`; when omitted for backward compatibility, the gateway tries Claude first, then Codex. Claude transcripts prefer the exact per-session path captured from hook events (including `CLAUDE_CONFIG_DIR` profiles), then fall back to `~/.claude/projects` for older session state. Codex transcripts are resolved from `$CODEX_HOME/sessions` or `~/.codex/sessions` rollout files. Grok streams the authoritative ACP `updates.jsonl` reported by its hooks, with a `$GROK_HOME/sessions/<encoded-cwd>/<session-id>/` scan as a fallback for older sessions. Completed Grok `image_gen` results are exposed as lazy ACP image blocks backed by the generated file, so Chat View can render them without terminal graphics support. Pi and OMP transcripts use the exact JSONL path reported by the installed extension, so profiles and custom session locations work without a directory scan. OMP validation understands its v3 fixed-width title slot before the session header. Kimi transcripts resolve through its profile-aware `session_index.jsonl` and stream the main agent's live `wire.jsonl`. OpenCode is proxied through the live local server recorded by its plugin. Transcript bytes stay on the host and are streamed only over the local forwarded gateway. If Codex resume creates a newer rollout for the same session id, reconnect to resolve the newest file.
 
 Server messages are JSON objects with `type` (`backlog`, `older`, `append`, `reset`, or `error`), `source`, physical `line` numbers, and raw JSONL rows for client-side rendering. Clients can request older rows with `{"type":"older","beforeLine":123,"limit":50}`.
 
-Oversized rows are redacted before streaming: long strings are truncated, and inline image payloads (Claude `source.data`, Pi/OMP `data`, Codex `image_url` data URLs) are replaced with a stub carrying `truncated: true`, `media_type`, decoded `bytes`, and `width`/`height` when the format is recognized. Clients fetch the actual bytes via the blob endpoint below.
+Oversized rows are redacted before streaming: long strings are truncated, and inline image payloads (Claude `source.data`, Grok/Pi/OMP `data`, Codex `image_url` data URLs, and OpenCode/Kimi `url` data URLs) are replaced with a stub carrying `truncated: true`, `media_type`, decoded `bytes`, and `width`/`height` when the format is recognized. Grok `image_gen`/`image_edit` file results and local source images passed to `image_edit` receive the same stub without embedding their bytes. Clients fetch the actual bytes via the blob endpoint below.
 
-### `GET /v1/transcripts/blob?session=<id>&line=<n>[&block=<i>][&source=claude|codex|opencode|pi|omp]`
+### `GET /v1/transcripts/blob?session=<id>&line=<n>[&block=<i>][&source=claude|codex|grok|opencode|pi|omp|kimi]`
 
-Serves the raw image bytes of one content block of one transcript line, re-read from disk or re-fetched from OpenCode on demand (so redaction never loses data). `line` is the physical transcript line index reported by the stream; `block` (default 0) indexes `message.content[i]` for Claude/Pi/OMP, `payload.content[i]` / `payload.output[i]` for Codex, or the flattened OpenCode image attachments. OMP `blob:sha256:` image references resolve through the profile/XDG-aware `blobs/` directory beside its managed `sessions/` tree. For Codex `view_image` function calls the endpoint resolves the call's absolute file `path` on the host and serves the file when it sniffs as an image (capped at 32 MB). Responds with the image `Content-Type` and cache headers; returns 404 when the addressed block is not an image.
+Serves the raw image bytes of one content block of one transcript line, re-read from disk or re-fetched from OpenCode on demand (so redaction never loses data). `line` is the physical transcript line index reported by the stream; `block` (default 0) indexes `message.content[i]` for Claude/Pi/OMP, including a Claude `tool_result` whose content contains an image; ACP `update.content[i]` for Grok; `event.result.output[i]` for Kimi; `payload.content[i]` / `payload.output[i]` for Codex; or the flattened OpenCode image attachments. Grok's synthetic Imagine blocks map back to `rawInput.image[i]` or `rawOutput.path`; OMP `blob:sha256:` references resolve through the profile/XDG-aware `blobs/` directory beside its managed `sessions/` tree; Kimi `blobref:<mime>;<sha256>` references resolve through the `blobs/` directory beside its main-agent `wire.jsonl`. For Codex `view_image` function calls the endpoint resolves the call's absolute file `path` on the host and serves the file when it sniffs as an image (capped at 32 MB). Responds with the image `Content-Type` and cache headers; returns 404 when the addressed block is not an image.
 
 ### `POST /v1/servers/kill`
 
