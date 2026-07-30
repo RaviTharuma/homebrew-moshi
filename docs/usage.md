@@ -121,7 +121,7 @@ File-backed storage writes secrets to `~/.config/moshi/secrets.json` with `0600`
 | `CURSOR_CONFIG_DIR` | Override Cursor config dir for hook install/status/uninstall. |
 | `KIMI_CODE_HOME` | Override the current Kimi Code data/config directory for hooks, Chat View transcripts, account identity, and usage credentials. |
 | `KIMI_SHARE_DIR` | Override the legacy kimi-cli config/share directory when `KIMI_CODE_HOME` is unset; Chat View and usage credentials read from this root too. |
-| `GROK_HOME` | Override Grok Build config dir for hook install/status/uninstall. |
+| `GROK_HOME` | Override Grok Build config dir for hook install/status/uninstall, Chat View sessions, and SuperGrok usage credentials (`auth.json`). |
 | `HERMES_HOME` | Override Hermes Agent's config, plugin, and state directory. |
 | `XDG_STATE_HOME` / `XDG_CONFIG_HOME` / `XDG_RUNTIME_DIR` | Standard XDG dirs (Linux). |
 
@@ -137,6 +137,12 @@ credential remains owned by Kimi Code: `moshi-hook` uses only a fresh access
 token and never uses, refreshes, or rewrites the rotating refresh token.
 Legacy `~/.kimi/credentials/kimi-code.json` is supported as a read-only
 fallback.
+
+Grok Build SuperGrok / X Premium usage reads `$GROK_HOME/auth.json` (default
+`~/.grok/auth.json`) and fetches the weekly credit pool from
+`https://cli-chat-proxy.grok.com/v1/billing?format=credits`. The credential
+remains owned by Grok: `moshi-hook` uses only a fresh OIDC access token and
+never uses, refreshes, or rewrites the refresh token.
 
 ## Subcommands
 
@@ -157,7 +163,7 @@ fallback.
 | `serve [--gateway-listen 127.0.0.1:24543]` | Run the daemon and localhost diff gateway in the foreground. Single-instance via `flock` on a lockfile next to the socket. |
 | `status [--json]` | Pairing state, paths, hook install state, and best-effort server attachment status for the paired host. Human output also asks the running daemon which tmux, Zellij, and Herdr binaries it can resolve; `--json` stays local and omits this diagnostic. |
 | `update [--version vX.Y.Z]` | Update a Linux/manual install from `cdn.getmoshi.app`. Verifies the release checksum before replacing the current binary. Homebrew installs are left untouched; use `brew upgrade moshi-hook`. |
-| `usage [--sync]` | Cached Codex, Claude, OpenCode, and Kimi snapshots; refreshes missing Claude/Kimi API caches first. `--sync` pushes them to the server and reports whether this host is attached to Moshi Pro. |
+| `usage [--sync]` | Cached Codex, Claude, OpenCode, Kimi, and Grok snapshots; refreshes missing Claude/Kimi/Grok API caches first. `--sync` pushes them to the server and reports whether this host is attached to Moshi Pro. |
 | `cwd-list [--json] [--limit N]` | Recent project working directories from local agent state (Claude, Codex, Cursor). Plain-text table by default; `--json` emits the shape the iOS preflight consumes. |
 | `servers [--ssh-connection \"<value>\"] [--mosh-port <p> [--mosh-host <ip>]] [--et-client-id <id>\|--et]` | Probe local TCP listeners and print HTTP web servers for SSH preflight (filtered to `text/html` responses, tagged with owning process + PID, one-entry-per-PID). With a session lookup, decorates each row with `isCurrentContext`. |
 | `servers kill --pid <pid> --port <port> [--host <host>] [--force=false]` | Terminate a discovered local HTTP server after re-validating that the PID and port still match the server list. |
