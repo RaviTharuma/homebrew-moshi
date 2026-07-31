@@ -308,11 +308,16 @@ Listen-address precedence:
 
 1. `moshi-hook serve --gateway-listen 127.0.0.1:24543`
 2. `MOSHI_HOOK_GATEWAY_LISTEN=127.0.0.1:24543`
-3. `~/.config/moshi-hook/config.toml`
+3. `~/.config/moshi/config.toml`
 
 ```toml
 [gateway]
 listen = "127.0.0.1:24543"
+# Discovery keeps running on a 45-second cadence when no gateway client is
+# attached, so the app can list servers without a terminal session. On by
+# default; set false to opt out. Prefer the CLI over hand-editing:
+#   moshi-hook set always-on-discovery off
+always_on_discovery = true
 ```
 
 4. Default `127.0.0.1:24543`
@@ -323,8 +328,10 @@ The HTTP gateway serves diff and bounded control actions for servers surfaced by
 
 ### `GET /events`
 
-Opens the local WebSocket carrying the current terminal context and discovered
-servers. For a working agent in Herdr or tmux, the context may include a
+Opens the local WebSocket carrying the current terminal context, discovered
+web servers in `servers`, and serve-sim previews in the optional `simulators`
+array. A serve-sim preview is never duplicated in `servers`. For a working
+agent in Herdr or tmux, the context may include a
 replaceable, non-persisted terminal preview:
 
 ```jsonc
