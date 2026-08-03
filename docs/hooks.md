@@ -184,17 +184,23 @@ hook or change Antigravity's native approval behavior.
 | Agent behavior | Moshi behavior |
 | --- | --- |
 | User submits a prompt | Publishes or updates `session_started` |
-| Permission request (shell command, MCP call, or file read) | Publishes `approval_required` |
+| Permission request (shell command or MCP call) | Publishes `approval_required`, but only once the terminal shows Cursor's prompt |
+| Auto-approved tool call (allowlisted command, any file read) | Nothing published |
 | File edit | Publishes file-edit progress |
 | Agent responds | Stored silently; the turn result carries the visible state |
 | Agent stops | Publishes `task_complete` |
 
 Cursor approvals use the same native-terminal model: Moshi may offer remote
 approval when the local environment can be verified, while the terminal prompt
-remains compatible. Cursor `--force` / `--yolo` actions stay local and do not
-create approval rows because Run Everything has already removed the human
-decision. Reasoning traces, editor-internal events, file watchers, and streaming
-partials are not surfaced.
+remains compatible. Cursor's permission hooks run ahead of its own decision and
+fire for every tool call, so Moshi waits for Cursor's matching
+`afterShellExecution` / `afterMCPExecution` before deciding: work that finishes
+promptly was resolved by policy and stays silent, while a call Cursor goes quiet
+on is one it is asking you about. A turn that reads a thousand files or runs a
+hundred allowlisted commands therefore produces no notifications. Cursor `--force` / `--yolo`
+actions stay local for the same reason: Run Everything has already removed the
+human decision. Reasoning traces, editor-internal events, file watchers, and
+streaming partials are not surfaced.
 
 ---
 
