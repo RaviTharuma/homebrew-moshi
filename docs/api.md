@@ -318,6 +318,14 @@ listen = "127.0.0.1:24543"
 # default; set false to opt out. Prefer the CLI over hand-editing:
 #   moshi-hook set always-on-discovery off
 always_on_discovery = true
+# Background usage collection polls Claude/Codex/Kimi/Grok rate-limit APIs
+# and uploads snapshots to Moshi. On by default; set false to opt out:
+#   moshi-hook set usage-collection off
+# Manual `moshi-hook usage` still works when this is off.
+usage_collection = true
+# Fresh installs leave these keys unset until `moshi-hook set --first-run`
+# (install.sh) or an interactive setup/serve/pair/install command. Homebrew
+# users keep defaults until one of those runs.
 ```
 
 4. Default `127.0.0.1:24543`
