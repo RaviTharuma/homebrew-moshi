@@ -323,9 +323,17 @@ always_on_discovery = true
 #   moshi-hook set usage-collection off
 # Manual `moshi-hook usage` still works when this is off.
 usage_collection = true
-# Fresh installs leave these keys unset until `moshi-hook set --first-run`
-# (install.sh) or an interactive setup/serve/pair/install command. Homebrew
-# users keep defaults until one of those runs.
+# Fresh installs leave the two keys above unset until `moshi-hook set
+# --first-run` (install.sh) or an interactive setup/serve/pair/install
+# command. Homebrew users keep defaults until one of those runs.
+#
+# An agent launched by another agent (a Codex started from inside a Claude
+# session, say) notifies as if you had started it yourself. Set true to
+# silence those. Off by default, and deliberately not part of first-run:
+# it hides their approval requests too, so a blocked nested agent is
+# invisible from the phone.
+#   moshi-hook set suppress-nested-agent-push on
+suppress_nested_agent_push = false
 ```
 
 4. Default `127.0.0.1:24543`
