@@ -422,7 +422,7 @@ Diff sessions expire after 15 minutes idle and are served under `/apps/diff/:ses
 ### `POST /v1/questions/answer`
 
 Submits a complete Chat View answer form to the live Claude Code, Codex, Grok
-Build, Kimi, Pi, OMP, or OpenCode terminal prompt in tmux, Zellij, or Herdr. The request
+Build, Hermes, Kimi, Pi, OMP, or OpenCode terminal prompt in tmux, Zellij, or Herdr. The request
 uses the same SSH/Mosh/ET session query parameters as `/events`. The daemon
 re-resolves the multiplexer pane and checks the agent name, agent session id,
 first question, option labels, and native TUI prompt markers before injecting
