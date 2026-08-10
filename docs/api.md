@@ -334,6 +334,18 @@ usage_collection = true
 # invisible from the phone.
 #   moshi-hook set suppress-nested-agent-push on
 suppress_nested_agent_push = false
+# On macOS, keep publishing events to Moshi but make them silent while the
+# local console is unlocked. "Unlocked" is only an OS lock-state signal; it
+# does not prove somebody is looking at the display. If lock state cannot be
+# read, the push is sent.
+#   moshi-hook set suppress-push-while-unlocked on
+suppress_push_while_unlocked = false
+# Optional HTTP probe allowlist for Browser Preview discovery. Omit it (or use
+# "all") to scan every eligible loopback listener. An empty array disables
+# HTTP probing entirely.
+#   moshi-hook set scan-ports 3000,5173,8000
+#   moshi-hook set scan-ports none
+scan_ports = "all"
 ```
 
 4. Default `127.0.0.1:24543`
