@@ -70,6 +70,10 @@ Codex approvals use the same native-terminal model: Moshi may offer remote
 approval when the local environment can be verified, but the agent's terminal
 prompt remains compatible.
 
+Codex lifecycle delivery is hybrid. Hooks report normal prompts, permissions,
+and stops, while the daemon also follows Codex's native session log for
+interruptions, input requests, and completion fallback when no hook arrives.
+
 ### OpenCode
 
 | Agent behavior | Moshi behavior |
