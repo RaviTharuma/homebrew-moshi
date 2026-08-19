@@ -107,6 +107,8 @@ tool, before the permission system decides — so a candidate is verified agains
 `events.jsonl`, the lifecycle log Grok writes beside its ACP transcript. A
 `permission_requested` with nothing after it means a human is being waited on;
 an auto-approved tool records `permission_resolved` in the same millisecond.
+Moshi briefly settles an unresolved request before publishing it so it cannot
+race between those two adjacent writes and push a phantom approval.
 Panes are the fallback when no log is readable. Verification runs off the
 socket handler because Grok holds the tool until `PreToolUse` hooks return: the
 hook waits on its ack, so waiting for the panel before acking would deadlock
