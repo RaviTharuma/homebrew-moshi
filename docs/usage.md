@@ -10,7 +10,7 @@ moshi-hook serve                          #    foreground fallback (or `brew ser
 Native Windows (**experimental**) bootstrap:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://cdn.getmoshi.app/hook/install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -c "irm https://getmoshi.app/install.ps1 | iex"
 ```
 
 The PowerShell installer verifies the published ZIP checksum, installs without

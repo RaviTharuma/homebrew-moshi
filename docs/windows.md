@@ -127,7 +127,7 @@ Preview builds use the same checksummed, per-user installer model as Herdr's
 Windows beta. From PowerShell:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://cdn.getmoshi.app/hook/install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -c "irm https://getmoshi.app/install.ps1 | iex"
 ```
 
 The installer verifies the published GoReleaser ZIP against `checksums.txt`,
@@ -152,6 +152,14 @@ Native Windows remains experimental, preview-only, and unsigned, so SmartScreen 
   installed `sqlite3.exe`.
 - Secrets written by the Windows file store are encrypted for the current user with DPAPI. Existing
   plaintext values remain readable and are encrypted the next time they are written.
+- The Herdr CLI resolves from the installer's own layout before `PATH`: `%HERDR_INSTALL_DIR%`, then
+  `%LOCALAPPDATA%\Programs\Herdr\bin`, then
+  `%HERDR_HOME%` (default `%USERPROFILE%\.herdr`) `\packages\standalone\current`.
+  Windows has one supported install path (`herdr.dev/install.ps1`, or its zip
+  extracted by hand), which junctions both of those directories onto one versioned release, so the
+  layout is knowable rather than guessed. `PATH` comes second because the Windows build ships an
+  app-local ConPTY runtime beside `herdr.exe` and breaks when only the executable is copied
+  elsewhere. `MOSHI_HERDR_PATH` still overrides everything.
 
 What remains unresolved before native Windows can drop the experimental label:
 
