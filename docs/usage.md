@@ -3,9 +3,19 @@
 ```bash
 moshi-hook pair --token <pairing-token>   # 1. pair the agent-hooks daemon
 moshi-hook install                        # 2. write hook configs for installed agents
-moshi-hook service install                # 3. run the daemon persistently on Linux
+moshi-hook service install                # 3. run persistently on Linux or Windows
 moshi-hook serve                          #    foreground fallback (or `brew services start moshi-hook` on macOS)
 ```
+
+Native Windows (**experimental**) bootstrap:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://cdn.getmoshi.app/hook/install.ps1 | iex"
+```
+
+The PowerShell installer verifies the published ZIP checksum, installs without
+elevation into versioned per-user directories, and places a stable junction on
+the user `PATH`. See [windows.md](windows.md) for the beta support boundary.
 
 After step 2, supported agents route their hooks through `moshi-hook`: Claude Code, Codex, OpenCode, Gemini CLI, Antigravity, Cursor, Kimi, Qwen Code, Grok Build, OMP (Oh My Pi), Pi, and Hermes Agent. The daemon (`serve`) holds the WebSocket to Moshi and the local Unix socket that hooks talk to.
 
@@ -25,7 +35,8 @@ The session name is the directory basename (`name` above). Moshi resolves the di
 tmux new-session -A -s name -c /absolute/path/to/name
 ```
 
-Because this uses `exec`, no Moshi wrapper process stays alive after tmux starts.
+Because this uses `exec`, no Moshi wrapper process stays alive after tmux starts. tmux has no native
+Windows build, so this launcher refuses to run there — see [windows.md](windows.md).
 
 ### Enterprise Linux 10 and tmux 3.3a
 
@@ -158,12 +169,12 @@ never uses, refreshes, or rewrites the refresh token.
 | `diff [path] [--no-open] [--port N]` | Serve the embedded Git diff viewer for a local project directory. |
 | `install` | Write Moshi entries into supported agent config files. By default, only installs targets whose config root already exists and reports missing agents as skipped. Use `--target claude,codex,opencode,gemini,antigravity,cursor,kimi,qwen,grok,omp,pi,hermes` to force or limit the set. Non-destructive: leaves user-owned hooks alone. OpenCode installs globally by default; use `--local` for `.opencode/plugins` in the current project. |
 | `uninstall` | Remove Moshi-owned entries from those files. For OpenCode, pass `--local` to remove a project-local install. |
-| `service install` | Linux only: write `~/.config/systemd/user/moshi-hook.service`, reload systemd, and `enable --now` the daemon. |
-| `service uninstall` | Linux only: disable the systemd user service and remove the generated unit. |
-| `service status` | Linux only: show `systemctl --user status moshi-hook.service --no-pager`. |
-| `serve [--gateway-listen 127.0.0.1:24543]` | Run the daemon and localhost diff gateway in the foreground. Single-instance via `flock` on a lockfile next to the socket. |
+| `service install` | Linux: install and start a systemd user service. Windows groundwork: register current-user logon startup under `HKCU\...\Run` and start a detached daemon without elevation. |
+| `service uninstall` | Disable/remove the Linux systemd service or Windows logon value and stop the daemon. |
+| `service status` | Show systemd status on Linux or the Windows logon registration. |
+| `serve [--gateway-listen 127.0.0.1:24543]` | Run the daemon and localhost diff gateway in the foreground. Single-instance via an OS file lock under the state directory. |
 | `status [--json]` | Pairing state, paths, hook install state, and best-effort server attachment status for the paired host. Human output also asks the running daemon which tmux, Zellij, and Herdr binaries it can resolve; `--json` stays local and omits this diagnostic. |
-| `update [--version vX.Y.Z]` | Update a Linux/manual install from `cdn.getmoshi.app`. Verifies the release checksum before replacing the current binary. Homebrew installs are left untouched; use `brew upgrade moshi-hook`. |
+| `update [--version vX.Y.Z]` | Update a Linux or Windows manual install from `cdn.getmoshi.app`. Verifies the release checksum before replacing the current binary. Windows uses ZIP assets and can rotate the currently running `.exe`. Homebrew installs are left untouched; use `brew upgrade moshi-hook`. |
 | `usage [--sync]` | Cached Codex, Claude, OpenCode, Kimi, Grok, and Antigravity snapshots; refreshes missing Claude profiles and missing/stale Codex, Kimi, Grok, and Antigravity API caches first (including OpenCode-only Codex with no rollouts). `--sync` pushes them to the server and reports whether this host is attached to Moshi Pro. On-demand: works even when background collection is off (`set usage-collection off`). JSON output also carries a local `cost` rollup per account — tokens burned today and over the last 7 days, split by model, with an estimated cost at public API list rates (not what a plan charged). Scanning is incremental and capped per refresh, so a large history fills in over several background passes; unpriced models report tokens with `pricingComplete: false` and no dollar figure. `--sync` does not upload it. |
 | `set [setting] [value]` | Show or change settings in `~/.config/moshi/config.toml`. `usage-collection` accepts `on`, `off`, or a polling interval such as `5m`; `on` restores the previously chosen interval (default `1m`). `scan-ports 3000,5173` restricts Browser Preview HTTP probes to those ports; `scan-ports all` restores the default scan-all behavior and `scan-ports none` disables HTTP probing. Scan-port changes apply on the next discovery refresh; restart the daemon after changing background settings: `always-on-discovery`, `usage-collection`, `suppress-nested-agent-push`, or `suppress-push-while-unlocked`. `install.sh` runs `moshi-hook set --first-run` at the end (both onboarding options checked/on; opens `/dev/tty` under `curl\|sh`). Skip with `MOSHI_HOOK_SKIP_FIRST_RUN=1`. Homebrew does not run that step — defaults stay on until `host setup` / `serve` / `pair` / `install` (interactive) or an explicit `set --first-run`. Machine-readable commands (`status --json`, etc.) never auto-prompt. |
 | `cwd-list [--json] [--limit N]` | Recent project working directories from local agent state (Claude, Codex, Cursor). Plain-text table by default; `--json` emits the shape the iOS preflight consumes. |
@@ -249,7 +260,7 @@ moshi-hook context --et-client-id abcdefghijklmnop
 
 Default `install` skips a managed file when the agent's config root is missing, for example `~/.cursor` or `~/.gemini`. Passing `--target` preserves the old create-if-missing behavior for that target.
 
-Hermes Agent keeps its conversation history in `$HERMES_HOME/state.db` rather than in per-session transcript files, so Chat View reads it through the `sqlite3` command and needs that binary on `PATH`. `moshi install` reports it when missing. Hooks, approvals, and session tracking do not depend on it — only Chat View does.
+Hermes Agent keeps its conversation history in `$HERMES_HOME/state.db` rather than in per-session transcript files. Chat View reads that database through Moshi's bundled read-only SQLite driver; no separate `sqlite3` command is required.
 
 Kimi's managed install targets the current Kimi Code lifecycle, including native `PermissionRequest` / `PermissionResult`, interruption, failure, and session-end callbacks. Approval hooks are observation-only: Kimi's terminal prompt remains authoritative while Moshi mirrors and can drive that verified prompt.
 
@@ -285,10 +296,14 @@ Replace `/opt/homebrew/bin/moshi-hook` with `which moshi-hook` if installed else
 
 ## Paths
 
-| What | macOS | Linux |
-|---|---|---|
-| State + log | `~/Library/Application Support/Moshi/` | `$XDG_STATE_HOME/moshi/` |
-| Socket | `<state>/moshi-hook.sock` | `$XDG_RUNTIME_DIR/moshi-hook.sock` |
-| Secrets | Keychain (`app.getmoshi.hook`) by default; `~/.config/moshi/secrets.json` with `--store file` | `<state>/secrets.json` (0600) |
+| What | macOS | Linux | Windows groundwork |
+|---|---|---|---|
+| State + log | `~/Library/Application Support/Moshi/` | `$XDG_STATE_HOME/moshi/` | `%LOCALAPPDATA%\Moshi\` |
+| Local IPC | `<state>/moshi-hook.sock` | `$XDG_RUNTIME_DIR/moshi-hook.sock` | `\\.\pipe\moshi-hook` |
+| Secrets | Keychain (`app.getmoshi.hook`) by default; `~/.config/moshi/secrets.json` with `--store file` | `<state>/secrets.json` (0600) | `<state>\secrets.json` |
 
 When run via `brew services`, logs land at `$(brew --prefix)/var/log/moshi-hook.log`.
+
+Native Windows is experimental: unsigned preview binaries, a narrower agent matrix, and no graceful
+process stop. WSL2 remains the stable layout — run `moshi-hook` and your agents inside the same
+distribution. See [windows.md](windows.md) for both layouts and their constraints.
