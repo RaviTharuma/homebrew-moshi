@@ -8,6 +8,46 @@ Wire protocols `moshi-hook` participates in. Five surfaces:
 4. **Host gateway HTTP** — Moshi app ↔ `moshi-hook serve` over an SSH local forward. Diff viewer JSON/static HTTP on localhost, no bearer auth.
 5. **CLI JSON** — clients ↔ CLI subcommands over SSH preflight. Stdout JSON for server discovery, terminal context, and cwd-list.
 
+## Transport doctrine
+
+Use HTTP for bounded request/response operations. Use WebSockets for state or
+ordered data that changes over time and must reach the client without polling.
+
+| Operation | Transport | Contract |
+|---|---|---|
+| Read one snapshot, query, page, or blob | HTTP `GET` | One request produces one bounded response. Reads may be cached or retried when their resource semantics allow it. |
+| Perform a user-initiated mutation | HTTP `POST` | One request produces an acknowledgement or a typed HTTP error. Non-idempotent commands are not retried automatically. |
+| Observe live state | WebSocket | The server publishes initial state and subsequent changes. This stream is the source of truth; do not poll an equivalent HTTP endpoint. |
+| Follow ordered or append-only data | WebSocket | One subscription produces multiple ordered results over its lifetime. |
+| Subscribe, unsubscribe, or page an existing stream | WebSocket control frame | The message controls that socket's existing stream; it is not a general RPC mechanism. |
+
+Commands and their resulting state deliberately use different transports. For
+example, `POST /v1/keys` returning `ok` proves that the bounded Escape command
+was delivered, not that the agent stopped. The `/events` WebSocket publishes
+the authoritative later `agentStatus` transition. Clients must not infer the
+state transition from the POST acknowledgement.
+
+Do not use a WebSocket as a general request/response bus. If an operation would
+need newly invented request IDs, status codes, timeouts, and retry rules, it
+belongs on HTTP. Conversely, do not add HTTP polling for state already
+published by `/events` or another live stream; parallel transports create two
+sources of truth and race during session changes.
+
+The following narrow cases are intentional:
+
+- WebSocket endpoints appear as `GET` in this reference because WebSocket starts
+  as an HTTP Upgrade request. After upgrade they follow the streaming contract,
+  not the HTTP read contract.
+- `GET /setup/host/:setupId/wait` is bootstrap polling before the host has the
+  identity and secret needed to open its long-lived WebSocket. Its setup session
+  is short-lived and it is not an alternative source of live host state.
+- `/events` watch messages and `/v1/transcripts` `older` messages configure or
+  page an already-open stream. New user mutations still use bounded HTTP POSTs.
+- The cloud approval bridge carries a blocking hook request and its asynchronous
+  decision over the already-required host WebSocket. The phone's user command
+  remains an HTTP POST; the socket routes the resulting server-initiated
+  decision to the waiting daemon.
+
 ## How the pieces fit
 
 Approval round-trip across all four components. Numbers reference the steps below.
@@ -302,7 +342,7 @@ Unknown types are logged and ignored — receivers must be lenient so the server
 
 ## 4. Host Gateway HTTP
 
-`moshi-hook serve` starts a localhost-only diff gateway in the same daemon process as the Unix socket and WebSocket bridge.
+`moshi-hook serve` starts a localhost-only API/diff gateway in the same daemon process as the Unix socket and WebSocket bridge. It does not expose the general web UI; bare `moshi` runs that UI as a separate foreground process on `127.0.0.1:24544` and proxies its API traffic here.
 
 Listen-address precedence:
 
@@ -357,6 +397,16 @@ Gateway HTTP is loopback-only and does not require `Authorization`. Clients reac
 
 The HTTP gateway serves diff and bounded control actions for servers surfaced by discovery. Pull-only host inspection is intentionally not exposed here: `GET /v1/capabilities`, `GET /v1/servers`, and `GET /v1/sessions/context` return `404`. Use the SSH preflight CLI commands below instead.
 
+### Client mode: embedded web UI + SSH host bridge
+
+See `docs/design/client-mode.md` for the full design. Bare `moshi` serves the embedded Moshi Web client and proxies its API traffic to the persistent daemon gateway. SSH is both auth and transport for remote hosts, and no machine opens a non-loopback port:
+
+- The built app-moshi assets (populate with `scripts/build-webapp.sh`) are served by the foreground web listener on `127.0.0.1:24544`; extensionless paths fall back to the SPA shell. `/gateway/*`, `/events`, `/hosts/*`, `/v1/*`, and `/apps/*` proxy to the daemon at `127.0.0.1:24543`, preserving same-origin HTTP and WebSocket behavior. Ctrl-C stops the web listener without stopping agent hooks.
+- `/hosts/<name>/<rest>` reverse-proxies `<rest>` (HTTP and WebSocket) to `127.0.0.1:24543` on `<name>` via `ssh -W` with `ControlMaster` reuse. `<name>` is any syntactically safe ssh destination (optional `user@` + hostname — config aliases and MagicDNS names alike; the daemon reads no ssh config of its own, clients remember their own host lists); unsafe names are `404`, ssh failures are `502` with the last ssh stderr line included (e.g. `Permission denied (publickey)`). BatchMode is forced: hosts needing interactive auth (passwords, locked agents like 1Password) fail fast — verify with plain `ssh <name>` first.
+- `GET /v1/pty?mux=…&host=<name>` runs the multiplexer attach through `ssh -t <name>` on a locally-owned PTY; terminal bytes never transit the remote gateway.
+- `POST /v1/hosts/forward` `{"host": "<name>", "ports": [3000, …]}` opens same-port ssh local forwards (`127.0.0.1:<p>` → remote `127.0.0.1:<p>`, max 16 per request) on the host's ControlMaster, so the client can load a remote dev server or simulator preview at `http://localhost:<p>` per the same-port doctrine (no path-prefix reverse proxy — see Transport under `/events`). Idempotent per live master; forwards die with it (ControlPersist reaps an idle master after 10 minutes) and the next request re-establishes them. Unsafe host names are `400`, ssh failures `502` with the last stderr line. A local port collision is detected before the mux request and surfaces as a plain-language `502` (a leftover forward held by the live master is cancelled and re-added instead); the URL is never rewritten to a different port.
+- `GET /v1/hosts/forwards` lists the live tunnels on this machine as `{"forwards": [{"host", "port", "pid"?}]}` — daemon bookkeeping (pruned when the local port has come free) merged with every discovered ssh-owned listener (hand-rolled `ssh -L`, or daemon forwards a restart forgot; `host` is parsed best-effort from the ssh command line, `pid` is the listener's). `POST /v1/hosts/unforward` `{"host", "port", "pid"?}` tears one down: a bridgeable host gets a mux cancel; otherwise the pid — verified to still be an ssh listener on that port — is terminated. Idempotent, judged by the local port coming free rather than ssh's unreliable `-O cancel` exit code. Both act on the LOCAL daemon only; tunnels are invisible to the remote gateway. Discovery never lists ssh-owned listeners as dev servers — a tunnel answers probes with the remote end's content and belongs in the tunnels list.
+
 ### `GET /events`
 
 Opens the local WebSocket carrying the current terminal context, discovered
@@ -364,6 +414,40 @@ web servers in `servers`, and serve-sim previews in the optional `simulators`
 array. A serve-sim preview is never duplicated in `servers`. For a working
 agent in Herdr or tmux, the context may include a
 replaceable, non-persisted terminal preview:
+
+The first snapshot identifies the hook and its additive API capabilities:
+
+```json
+{
+  "gateway": {
+    "version": "0.3.1",
+    "protocolVersion": 1,
+    "capabilities": [
+      "events.watch.workspaces",
+      "events.watch.agent-status",
+      "events.license",
+      "transcripts.limit",
+      "terminal.prompt",
+      "terminal.keys",
+      "workspaces.live-session"
+    ]
+  }
+}
+```
+
+Clients should select API paths by capability rather than comparing release
+versions. `version` is still useful for diagnostics, UI, and coarse handling of
+older daemons that omit `gateway`; `protocolVersion` versions the envelope and
+does not change for additive fields or capabilities.
+
+### `GET /v1/version`
+
+The same `gateway` object, served over plain HTTP (added in 0.3.1). Exists for
+one job: a pre-connect compatibility probe over the ssh host bridge, before
+the client commits to a host switch. A remote daemon answering `404` here is
+by definition older than 0.3.1 (pre watch-protocol) — clients block the switch
+and tell the user to upgrade that host's moshi-hook instead of connecting with
+degraded behavior.
 
 ```jsonc
 {
@@ -408,6 +492,176 @@ tier, or a version profile:
 }
 ```
 
+#### Watch protocol (loopback clients)
+
+A connected client with no terminal session of its own (the web app) can
+send a watch request at any time to subscribe to server-side pushes:
+
+```jsonc
+{ "watch": { "workspaces": true, "agent": { "source": "claude", "session": "agent-session-id" }, "context": true } }
+```
+
+The gateway acks with `{"watching": {"workspaces": true, "agent": true, "context": true}}`
+and then pushes frames whenever their content changes (workspaces and context
+on a 1 s tick, agent status on a 250 ms tick, all deduped by JSON):
+
+```jsonc
+// the loopback mux tree, same shape as GET /v1/workspaces
+{ "workspaces": { "kind": "herdr", "groups": [ /* … */ ] } }
+
+// the loopback mux's terminal context — the same TerminalContext shape the
+// session-scoped context mode serves iOS, detected for the daemon's own
+// machine (herdr's focused pane; copyMode/scrollPosition drive the web
+// terminal's scroll-to-bottom control). Currently herdr only.
+{ "context": { "kind": "herdr", "herdr": {
+    "session": "work", "paneId": "wB:p6", "copyMode": true,
+    "scrollPosition": 42, "historySize": 900 }, "cwd": "/Users/me/proj" } }
+
+// one agent session's live state: status + model from the hook stamps,
+// the scraped status line while working, the plan menu while blocked,
+// and any pending interactive prompt (the hook-captured agent.prompt blob)
+{ "agentStatus": {
+    "source": "claude", "session": "agent-session-id",
+    "status": "working", "modelName": "fable-5",
+    "title": "Fix login redirect loop",  // conversation title, see /v1/workspaces
+    "contextRemaining": 42,  // % of context window left, 1..100; omitted = unknown
+    "commands": [
+      { "name": "clear", "description": "Clear conversation history" },
+      { "name": "compact", "description": "Summarize and compact the conversation", "inputHint": "[instructions]", "openTerminalOnRun": true }
+    ],
+    "ephemeral": { "type": "working", "lines": ["✳ Thinking… (12s)"] },
+    "planMenu": { "title": "Implement this plan?", "options": ["Approve", "Keep planning"] },
+    "pendingPrompt": { "kind": "question", "toolUseId": "…", "questions": [ /* … */ ] },
+    "pendingPromptAt": 1787219608.6
+} }
+```
+
+`commands` is a complete replacement snapshot for the active terminal agent's
+Chat View slash-command menu. Names omit the leading `/`. The daemon owns this
+agent-specific catalog so desktop and mobile clients do not maintain divergent
+lists. Catalogs are deliberately version-tolerant and describe commands to send
+to the already-running TUI; they are not ACP capability claims. Clients should
+replace their cached list whenever a new `agentStatus` frame arrives.
+`openTerminalOnRun: true` means the command's result belongs to the agent TUI:
+after dispatching it, clients should immediately reveal the owning terminal
+instead of leaving Chat View waiting for a JSONL row. Session-boundary
+commands (`/new`, `/clear`) omit the flag — Chat View renders their outcome
+itself (session follow → fresh empty chat). Custom skills may be
+presented alongside this list, but must retain their agent-native
+prefix (`/` or `$`) and should not overwrite a built-in command with the same
+name.
+
+### `GET /v1/composer/suggestions?source=<agent>&session=<id>&kind=commands|files|skills[&query=<text>&limit=<n>]`
+
+Returns the host-owned autocomplete data for one live Chat View session. This
+is a bounded UI read rather than general filesystem access: `source` and
+`session` must resolve to hook-written session state, and the workspace root is
+always taken from that state. Callers cannot supply a path to scan. `limit`
+defaults to 20 and is capped at 50.
+
+```jsonc
+// kind=commands
+{
+  "source": "codex", "sessionId": "agent-session-id", "kind": "commands",
+  "items": [{
+    "kind": "command", "name": "compact", "prefix": "/",
+    "description": "Compact the conversation", "openTerminalOnRun": true
+  }]
+}
+
+// kind=files&query=app
+{
+  "source": "codex", "sessionId": "agent-session-id", "kind": "files",
+  "items": [{ "kind": "file", "name": "src/App.tsx", "path": "src/App.tsx", "prefix": "@" }]
+}
+
+// kind=skills&query=review
+{
+  "source": "codex", "sessionId": "agent-session-id", "kind": "skills",
+  "items": [{
+    "kind": "skill", "name": "review", "prefix": "$", "scope": "project",
+    "description": "Review the current changes carefully",
+    "path": "/Users/me/project/.codex/skills/review/SKILL.md"
+  }]
+}
+```
+
+File results are relative to the session workspace, never follow symlinks, and
+skip common generated/vendor directories. Skill discovery reads `SKILL.md`
+frontmatter from the active agent's project and profile roots, including a
+session-specific `CLAUDE_CONFIG_DIR`, `$CODEX_HOME`, and `$GROK_HOME`. Project
+skills win name collisions over user and bundled skills. Codex skills use `$`;
+other currently supported skill surfaces use `/`. `truncated: true` means the
+result or bounded filesystem walk reached a limit and the client should refine
+`query`.
+
+### `GET /v1/session/options?source=<agent>&session=<id>`
+
+Returns the model and model-dependent option catalog for one live Chat View
+session. The first catalog version follows Orca IDE's session-option structure
+and covers Claude, Codex, Gemini, Cursor, and Grok. Other recognized agents
+return `supported: false` with an empty `models` array, so clients can hide the
+picker without maintaining their own support list.
+
+```jsonc
+{
+  "source": "codex",
+  "sessionId": "agent-session-id",
+  "catalogSource": "curated",
+  "catalogVersion": "2026-08-23",
+  "authoritative": false,
+  "supported": true,
+  "current": { "model": "gpt-5.6-sol", "effort": "high" },
+  "models": [{
+    "id": "gpt-5.6-sol",
+    "label": "GPT-5.6 Sol",
+    "options": [{
+      "id": "effort",
+      "label": "Reasoning effort",
+      "category": "thought_level",
+      "type": "select",
+      "defaultValue": "medium",
+      "choices": [
+        { "value": "minimal", "label": "Minimal" },
+        { "value": "low", "label": "Low" },
+        { "value": "medium", "label": "Medium" },
+        { "value": "high", "label": "High" },
+        { "value": "xhigh", "label": "Extra high" },
+        { "value": "max", "label": "Max" },
+        { "value": "ultra", "label": "Ultra" }
+      ],
+      "apply": {
+        "enabled": false,
+        "mode": "agent-picker",
+        "command": "/model",
+        "openTerminalOnRun": true
+      }
+    }]
+  }],
+  "modelApply": {
+    "enabled": false,
+    "mode": "agent-picker",
+    "command": "/model",
+    "openTerminalOnRun": true
+  }
+}
+```
+
+`current` is read from durable agent state and, where available, refined from
+the latest native transcript events so a model changed inside the TUI is not
+reported from stale hook state. A current model need not appear in `models`:
+catalogs are versioned suggestions, while account-specific and custom model IDs
+remain valid session state.
+
+The `apply` fields reserve the eventual live-update transport. They are
+deliberately returned with `enabled: false` in this API slice: clients may render
+the picker but must not yet submit mutations. `mode: "command"` means a future
+implementation can send the formatted command to the TUI; `agent-picker` means
+the harness must own the final choice and the client should reveal Terminal View.
+
+Re-sending `watch` reconfigures the subscription (one agent session at a
+time; `"agent": null` clears it) and always answers with a fresh snapshot.
+
 ### `POST /v1/diff/start`
 
 Starts or reuses an embedded diff viewer session for a Git repository.
@@ -430,6 +684,12 @@ uses the same SSH/Mosh/ET session query parameters as `/events`. The daemon
 re-resolves the multiplexer pane and checks the agent name, agent session id,
 first question, option labels, and native TUI prompt markers before injecting
 any keys. A changed/stale prompt returns `409` without sending input.
+
+The session-lookup params are optional for loopback callers (same rule as
+`/v1/prompt`): without them, the pane and the hook-captured prompt blob are
+resolved from the recorded state for the given `source`/`sessionId` (tmux and
+herdr; `404` when no state exists), and the on-screen verification still runs
+before any key is sent.
 
 Cursor is answered one question per request: its form draws a single question at
 a time and Enter advances to the next, so `questions` must hold exactly the
@@ -465,7 +725,9 @@ same verified TUI bridge. It supports Claude Code, Codex, Kimi, Pi, OMP, and
 OpenCode. The app sends the complete
 visible menu and the plan markdown, not a raw key. The daemon verifies the
 agent session, menu title, every numbered option label, and a visible
-fingerprint from the plan before it selects anything.
+fingerprint from the plan before it selects anything. As with question
+answers, the session-lookup params are optional for loopback callers, which
+resolve the pane and captured prompt from the recorded agent state instead.
 
 ```jsonc
 {
@@ -490,6 +752,121 @@ numbered choice bindings. Pi and OMP use the native arrow-and-confirm
 sequence, paced as separate terminal events so redraws cannot swallow input.
 A stale plan, changed menu, or different agent session returns `409`; an
 unavailable pane also fails without sending a partial decision.
+
+### `POST /v1/prompt[?<session lookup>]`
+
+Types a free-form prompt into the pane running the given agent session and
+submits it with Enter, so a chat client can message the agent without owning a
+terminal connection. Unlike question and plan answers there is no on-screen
+form to replay, so no screen-content verification happens — the text lands in
+whatever state the agent's composer is in.
+
+The session-lookup query params are optional here. With them (`ssh-connection`,
+`mosh-port`[+`mosh-host`], or `et-client-id`), the caller's terminal is
+resolved live exactly like `/v1/questions/answer`, and a terminal that no
+longer runs the expected agent or session returns `409` without injecting
+anything. Without them — a local loopback client has no SSH session — the pane
+is resolved from the hook-recorded state for that agent session (tmux and
+herdr only), and the pane's existence is re-checked before any input is sent.
+
+```jsonc
+// request
+{ "source": "claude", "sessionId": "agent-session-id", "text": "fix the failing test" }
+
+// response
+{ "ok": true, "source": "claude", "sessionId": "agent-session-id" }
+```
+
+Multi-line text is wrapped in bracketed-paste markers so harnesses that enable
+bracketed paste keep the newlines in the composer instead of submitting on
+each one; the submitting Enter is sent as its own terminal event after a short
+render window. Failure codes: `400` missing `source`/`sessionId`/`text` or bad
+lookup params; `404` no live terminal (with lookup) or no recorded state for
+the session (without); `409` the live terminal changed agent or session; `422`
+the terminal kind cannot take injected text; `500` the pane vanished or the
+multiplexer command failed.
+
+### `POST /v1/keys[?<session lookup>]`
+
+Injects a short sequence of named control/navigation keys (interrupt, mode
+toggles, menu movement) into the pane running the given agent session — the
+raw-control counterpart to `/v1/prompt`, with the same dual pane resolution
+(verified live terminal with lookup params, hook-recorded state for loopback
+callers). Keys come from a fixed allowlist: `Enter`, `Escape`, `Tab`, `BTab`,
+arrows, `Space`, `Home`/`End`, `PageUp`/`PageDn`, `BSpace`, `C-a`…`C-z`
+chords, and single printable characters; at most 8 per request, paced as
+separate terminal events. Free-form text is rejected — it belongs to
+`/v1/prompt`.
+
+```jsonc
+// request
+{ "source": "claude", "sessionId": "agent-session-id", "keys": ["Escape"] }
+
+// response
+{ "ok": true, "source": "claude", "sessionId": "agent-session-id" }
+```
+
+### `GET /v1/workspaces[?<session lookup>]`
+
+Enumerates the normalized two-level workspace tree of a multiplexer — the
+data structure behind the apps' Jump To menu. Both herdr (workspace → tab)
+and tmux (session → window) collapse onto one shape; herdr additionally
+reports a live per-node agent status and per-tab agent kind.
+
+With session-lookup params (`ssh-connection`, `mosh-port`[+`mosh-host`], or
+`et-client-id`) the tree describes the mux the caller's terminal runs inside,
+and `focused` marks the caller's current branch. Without them — a loopback
+desktop client has no terminal session — the mux resolves to herdr when its
+server responds, or the default tmux server otherwise, and no group is marked
+focused. `422` when the
+terminal's mux is unsupported (zellij) or, for loopback, when no local mux
+exists.
+
+```jsonc
+{
+  "kind": "herdr",                              // "herdr" | "tmux"
+  "capabilities": { "paneList": true, "paneFocus": "agent-only" },
+  "groups": [{
+    "id": "wB", "label": "app-moshi", "focused": true, "agentStatus": "working",
+    "worktree": { /* herdr repo membership, when known */ },
+    "children": [{
+      "id": "wB:t1", "label": "1", "focused": true,
+      "agentStatus": "working",                  // working|blocked|done|idle|unknown
+      "agent": "claude",
+      "sessionId": "85d203b1-…",                 // live agent session in this tab
+      "title": "Fix login redirect loop",        // conversation title (see below)
+      "model": "fable-5",                        // display label; omitted when unknown
+      "contextRemaining": 42,                     // 1..100; omitted when unknown
+      "cwd": "/Users/me/projects/app-moshi",
+      "paneCount": 1, "stateChangeOrder": 18
+    }]
+  }]
+}
+```
+
+`title` is the session's conversation title, filled for session-bearing nodes
+(tabs here, panes on `/v1/workspaces/panes`, and the `agentStatus` watch
+frame). It is read from the agent's own records where one exists — Claude's
+`custom-title` (user rename, wins) and `ai-title` rows in the session JSONL;
+Codex's `thread_name` in `<CODEX_HOME>/session_index.jsonl`; Grok's
+`generated_title`/`session_summary` in the session dir's summary.json; Kimi's
+`title` in the session dir's state.json; OpenCode's live-server session title
+(`GET /session/:id`); OMP's leading `{"type":"title"}` slot row — with a short
+derivation from the first real user prompt as the fallback (Pi, Cursor,
+Hermes have only the derived form; harness-injected turns are skipped).
+Scans are cached and incremental, so tree ticks stay cheap.
+
+### `GET /v1/workspaces/panes?groupId=<id>&childId=<id>[&<session lookup>]`
+
+The lazy third level: panes of one tree child, echoing the requested target so
+a late response can be matched to its row. Same session-lookup rules and
+loopback fallback as `/v1/workspaces`.
+
+### `POST /v1/workspaces/focus[?<session lookup>]`
+
+Focuses a workspace/tab/pane (herdr) or session/window (tmux) in the caller's
+mux. Requires the session lookup: tmux focus switches the caller's own
+attached client, which a loopback caller does not have.
 
 ### `GET /v1/transcripts?session=<id>[&source=claude|codex|cursor|grok|opencode|hermes|pi|omp|kimi][&limit=<n>]`
 
@@ -517,13 +894,16 @@ Terminates a discovered local HTTP server. The daemon re-runs server discovery a
 { "killed": true, "forced": false, "pid": 27753, "port": 5173, "server": { /* discovered server */ } }
 ```
 
-### `POST /v1/paste?<session lookup>`
+### `POST /v1/paste[?<session lookup>]`
 
-Injects an image into the caller's multiplexer pane: the tmux pane, the focused herdr pane, or the zellij pane (falling back to the session's focused pane when the context carries no pane id, since zellij focused-pane actions silently no-op without an attached client). Takes the same session-lookup query params as `/events` (`ssh-connection`, `mosh-port`[+`mosh-host`], or `et-client-id`); the pane is resolved live on the host, so the app never passes (possibly stale) pane ids. Bodies are capped at 64 MB.
+Injects an image into the caller's multiplexer pane: the tmux pane, the focused herdr pane, or the zellij pane (falling back to the session's focused pane when the context carries no pane id, since zellij focused-pane actions silently no-op without an attached client). Takes the same session-lookup query params as `/events` (`ssh-connection`, `mosh-port`[+`mosh-host`], or `et-client-id`); the pane is resolved live on the host, so the app never passes (possibly stale) pane ids. Loopback callers may omit the lookup and pass `source` + `sessionId` in the body instead; the pane then comes from the recorded agent state (tmux and herdr). Bodies are capped at 64 MB.
 
 ```jsonc
-// request
+// request (with session lookup)
 { "data": "<base64 image bytes>", "mimeType": "image/png" }
+
+// request (loopback, no session lookup)
+{ "data": "<base64 image bytes>", "mimeType": "image/png", "source": "claude", "sessionId": "agent-session-id" }
 
 // response
 { "ok": true, "mode": "clipboard", "verified": true, "path": "/tmp/moshi-paste-123.png" }

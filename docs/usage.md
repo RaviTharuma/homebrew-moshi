@@ -19,6 +19,25 @@ the user `PATH`. See [windows.md](windows.md) for the beta support boundary.
 
 After step 2, supported agents route their hooks through `moshi-hook`: Claude Code, Codex, OpenCode, Gemini CLI, Antigravity, Cursor, Kimi, Qwen Code, Grok Build, OMP (Oh My Pi), Pi, and Hermes Agent. The daemon (`serve`) holds the WebSocket to Moshi and the local Unix socket that hooks talk to.
 
+## Local web client
+
+Run the embedded web client in the foreground with the `moshi` alias and no
+arguments. It opens the default browser at `http://127.0.0.1:24544` after the
+listener is ready:
+
+```bash
+moshi
+```
+
+Pass `moshi --no-open` to print the URL without opening a browser.
+
+The foreground web process serves static UI assets and proxies API and
+WebSocket requests to the daemon on `127.0.0.1:24543`. If a persistent
+`moshi serve` daemon is already running, the web client reuses it. Otherwise,
+the web client starts a temporary daemon automatically and stops it when the
+web client exits. API requests log at INFO, static assets at DEBUG (`moshi -v`),
+and proxy/server failures at ERROR.
+
 ## Project tmux launcher
 
 The installed package also exposes `moshi` as a convenience alias for `moshi-hook`. Passing one directory argument starts or attaches a tmux session for that project:
@@ -79,6 +98,7 @@ Useful host commands:
 
 | Command | What it does |
 |---|---|
+| `moshi [--no-open]` (no path) | Run the embedded web client on `127.0.0.1:24544` until Ctrl-C and open it in the default browser unless `--no-open` is set. Reuses a persistent daemon or starts a temporary one automatically, proxies API/WebSocket traffic to it, and prints request logs. |
 | `host setup [--name <n>] [--host <h>] [--port <p>] [--user <u>] [--force]` | Start an Easy Pair setup session, print the QR, and pair this daemon after claim. |
 | `host list` | List local Moshi SSH/Mosh pairings installed on this host. |
 | `host revoke <id>` | Remove a Moshi host public key from `authorized_keys`. |
@@ -124,7 +144,7 @@ File-backed storage writes secrets to `~/.config/moshi/secrets.json` with `0600`
 | `MOSHI_HOOK_CONFIG_DIR` | Override the config dir for `config.toml` gateway settings. |
 | `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | Proxy usage-provider HTTP requests. On macOS, when these are unset, usage polling falls back to the active system HTTP/HTTPS proxy reported by `scutil --proxy`, including for launchd/Homebrew services. |
 | `CLAUDE_CONFIG_DIR` | Override the Claude Code profile used by hook install/status/uninstall; active hooked sessions also register this profile for Chat View, usage, and account labels. |
-| `CODEX_HOME` | Override the Codex home used for hook install/status/uninstall, session-log lifecycle monitoring, Chat View transcripts, and usage collection. Lifecycle monitoring reads the daemon's environment at startup; restart the daemon after changing it. |
+| `CODEX_HOME` | Override the Codex home used for hook install/status/uninstall, session-log lifecycle monitoring, Chat View transcripts, and usage collection. Keyring-backed Codex usage is read through Codex's local app-server; file-backed `auth.json` and OpenCode OAuth remain supported. Lifecycle monitoring reads the daemon's environment at startup; restart the daemon after changing it. |
 | `OPENCODE_CONFIG_DIR` | Override OpenCode global config/plugin dir for hook install/status/uninstall. |
 | `ANTIGRAVITY_CONFIG_DIR` | Override Antigravity's global `config` directory for hook install/status/uninstall. |
 | `OMP_PROFILE` / `PI_PROFILE` | Select the active named OMP profile (`OMP_PROFILE` takes precedence). |
@@ -172,7 +192,7 @@ never uses, refreshes, or rewrites the refresh token.
 | `service install` | Linux: install and start a systemd user service. Windows groundwork: register current-user logon startup under `HKCU\...\Run` and start a detached daemon without elevation. |
 | `service uninstall` | Disable/remove the Linux systemd service or Windows logon value and stop the daemon. |
 | `service status` | Show systemd status on Linux or the Windows logon registration. |
-| `serve [--gateway-listen 127.0.0.1:24543]` | Run the daemon and localhost diff gateway in the foreground. Single-instance via an OS file lock under the state directory. |
+| `serve [--gateway-listen 127.0.0.1:24543]` | Run the daemon and localhost API/diff gateway in the foreground. Does not serve the general web UI. Single-instance via an OS file lock under the state directory. |
 | `status [--json]` | Pairing state, paths, hook install state, and best-effort server attachment status for the paired host. Human output also asks the running daemon which tmux, Zellij, and Herdr binaries it can resolve; `--json` stays local and omits this diagnostic. |
 | `update [--version vX.Y.Z]` | Update a Linux or Windows manual install from `cdn.getmoshi.app`. Verifies the release checksum before replacing the current binary. Windows uses ZIP assets and can rotate the currently running `.exe`. Homebrew installs are left untouched; use `brew upgrade moshi-hook`. |
 | `usage [--sync]` | Cached Codex, Claude, OpenCode, Kimi, Grok, and Antigravity snapshots; refreshes missing Claude profiles and missing/stale Codex, Kimi, Grok, and Antigravity API caches first (including OpenCode-only Codex with no rollouts). `--sync` pushes them to the server and reports whether this host is attached to Moshi Pro. On-demand: works even when background collection is off (`set usage-collection off`). JSON output also carries a local `cost` rollup per account — tokens burned today and over the last 7 days, split by model, with an estimated cost at public API list rates (not what a plan charged). Scanning is incremental and capped per refresh, so a large history fills in over several background passes; unpriced models report tokens with `pricingComplete: false` and no dollar figure. `--sync` does not upload it. |
