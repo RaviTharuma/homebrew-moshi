@@ -532,9 +532,25 @@ on a 1 s tick, agent status on a 250 ms tick, all deduped by JSON):
     "ephemeral": { "type": "working", "lines": ["✳ Thinking… (12s)"] },
     "planMenu": { "title": "Implement this plan?", "options": ["Approve", "Keep planning"] },
     "pendingPrompt": { "kind": "question", "toolUseId": "…", "questions": [ /* … */ ] },
-    "pendingPromptAt": 1787219608.6
+    "pendingPromptAt": 1787219608.6,
+    "pendingApproval": {
+      "actionId": "122fa92b…",
+      "title": "Bash command",
+      "message": "touch /tmp/probe",
+      "toolName": "Bash",
+      "openedAt": 1787219608.6
+    }
 } }
 ```
+
+`pendingApproval` is the live tool-approval interaction from the daemon's TUI
+bridge — the same verified prompt the phone inbox sees — so Chat View can
+render an approve/deny card for terminal permission dialogs. It is never set
+alongside `pendingPrompt` — the richer native question/plan card wins — but it
+may coexist with `planMenu`, whose numbered-menu scraper matches permission
+dialogs too. Answer it via `POST /v1/approvals/answer`
+(capability `approvals.answer`); the frame drops the field within a tick of
+the dialog resolving, however it was answered.
 
 `commands` is a complete replacement snapshot for the active terminal agent's
 Chat View slash-command menu. Names omit the leading `/`. The daemon owns this
@@ -752,6 +768,30 @@ numbered choice bindings. Pi and OMP use the native arrow-and-confirm
 sequence, paced as separate terminal events so redraws cannot swallow input.
 A stale plan, changed menu, or different agent session returns `409`; an
 unavailable pane also fails without sending a partial decision.
+
+### `POST /v1/approvals/answer`
+
+Routes a Chat View approve/deny into the agent's native terminal permission
+dialog through the daemon's TUI bridge (capability `approvals.answer`). The
+`actionId` comes from the `pendingApproval` field of the `/events` agentStatus
+frame. The bridge re-verifies the visible screen before typing — the same
+verification the phone's remote decision path runs — so a stale card cannot
+answer a different question.
+
+```jsonc
+{
+  "source": "claude",
+  "sessionId": "agent-session-id",
+  "actionId": "122fa92b…",
+  "decision": "approve"                  // "approve" | "deny"
+}
+```
+
+Returns `200` with `{"ok": true, …}` once the keys are delivered. A changed,
+superseded, or already-answered approval returns `409`; a missing pane `422`;
+a daemon running without its TUI bridge `503`. The resolved state reaches
+clients as the next agentStatus frame (the `pendingApproval` field disappears
+and the status leaves `blocked`).
 
 ### `POST /v1/prompt[?<session lookup>]`
 
