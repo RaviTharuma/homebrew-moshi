@@ -602,6 +602,18 @@ defaults to 20 and is capped at 50.
 }
 ```
 
+`kind=commands` merges the built-in catalog with user-authored custom commands
+discovered on disk: Claude Code `.claude/commands/*.md` (project) and
+`<config>/commands/*.md` (user, honoring a session-specific
+`CLAUDE_CONFIG_DIR`), Codex `$CODEX_HOME/prompts/*.md`, OpenCode
+`.opencode/command/*.md` plus its config-dir `command/*.md`, and Gemini/Qwen
+`commands/*.toml` (nested TOML directories namespace with `:`, e.g.
+`/git:commit`). Custom entries carry `scope: "project" | "user"` and a `path`,
+never shadow a same-named built-in, and omit `openTerminalOnRun` because they
+expand to prompts that produce transcript rows. Custom-command discovery is
+best effort: a missing root or unresolved cwd drops the custom entries, never
+the catalog.
+
 File results are relative to the session workspace, never follow symlinks, and
 skip common generated/vendor directories. Skill discovery reads `SKILL.md`
 frontmatter from the active agent's project and profile roots, including a
