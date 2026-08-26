@@ -690,6 +690,47 @@ the harness must own the final choice and the client should reveal Terminal View
 Re-sending `watch` reconfigures the subscription (one agent session at a
 time; `"agent": null` clears it) and always answers with a fresh snapshot.
 
+### `GET /v1/integrations`
+
+Reports the hook install state of every supported agent, for the web Settings
+→ Integrations list. Same probe as `moshi-hook pair --json`'s `hooks` rows:
+`not_found` means the agent's config root doesn't exist on this machine,
+`stale` means the agent exists but its hook config is missing entries (a
+reinstall fixes it), `current` means everything the installer would write is
+present.
+
+```jsonc
+{
+  "integrations": [
+    { "target": "claude", "status": "current", "path": "/Users/me/.claude/settings.json" },
+    { "target": "codex", "status": "stale", "path": "/Users/me/.codex/hooks.json",
+      "missing": ["SessionStart"] },
+    { "target": "kimi", "status": "not_found" }
+    // "error" rows carry an "error" string; "advisories" list prerequisites
+    // a reinstall cannot supply (e.g. an external binary to install).
+  ]
+}
+```
+
+### `POST /v1/integrations/install`
+
+Runs the implicit `moshi-hook install` over HTTP: each requested target whose
+agent config root exists gets its hooks (re)written; agents never configured on
+this machine are skipped, not created. Body is `{}` for all targets or
+`{ "targets": ["claude", "codex"] }` for a subset. Responds with per-target
+results plus the refreshed status list so clients update in one round trip.
+
+```jsonc
+{
+  "results": [
+    { "target": "claude", "action": "installed" },
+    { "target": "codex", "action": "skipped", "reason": "agent not found" }
+    // "error" actions carry the failure in "reason"
+  ],
+  "integrations": [ /* same shape as GET /v1/integrations */ ]
+}
+```
+
 ### `POST /v1/diff/start`
 
 Starts or reuses an embedded diff viewer session for a Git repository.

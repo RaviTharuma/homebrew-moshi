@@ -31,6 +31,11 @@ moshi
 
 Pass `moshi --no-open` to print the URL without opening a browser.
 
+Pass `moshi --listen 0.0.0.0:24544` to bind the web client on all interfaces
+so other devices on your network can reach it. The daemon gateway stays on
+loopback; only the web listener is exposed, and anyone who can reach it has
+full control of the daemon, so only do this on trusted networks.
+
 The foreground web process serves static UI assets and proxies API and
 WebSocket requests to the daemon on `127.0.0.1:24543`. If a persistent
 `moshi serve` daemon is already running, the web client reuses it. Otherwise,
@@ -98,7 +103,7 @@ Useful host commands:
 
 | Command | What it does |
 |---|---|
-| `moshi [--no-open]` (no path) | Run the embedded web client on `127.0.0.1:24544` until Ctrl-C and open it in the default browser unless `--no-open` is set. Reuses a persistent daemon or starts a temporary one automatically, proxies API/WebSocket traffic to it, and prints request logs. |
+| `moshi [--no-open] [--listen <addr>]` (no path) | Run the embedded web client on `127.0.0.1:24544` (or `--listen`, e.g. `0.0.0.0:24544` for all interfaces) until Ctrl-C and open it in the default browser unless `--no-open` is set. Reuses a persistent daemon or starts a temporary one automatically, proxies API/WebSocket traffic to it, and prints request logs. |
 | `host setup [--name <n>] [--host <h>] [--port <p>] [--user <u>] [--force]` | Start an Easy Pair setup session, print the QR, and pair this daemon after claim. |
 | `host list` | List local Moshi SSH/Mosh pairings installed on this host. |
 | `host revoke <id>` | Remove a Moshi host public key from `authorized_keys`. |
