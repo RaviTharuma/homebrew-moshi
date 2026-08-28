@@ -899,6 +899,26 @@ separate terminal events. Free-form text is rejected — it belongs to
 { "ok": true, "source": "claude", "sessionId": "agent-session-id" }
 ```
 
+### `GET /v1/muxes`
+
+Enumerates the loopback muxes a session-less client can pin: every herdr
+session the CLI knows (running or not — a stopped session is still
+selectable, the PTY attach `herdr --session <name>` starts it) plus tmux
+when installed. `active` marks the option the default loopback resolution
+currently picks; `id` is exactly what clients pass back as the `mux`
+selection. Through the `/hosts/<name>/` bridge the list describes that
+remote machine.
+
+```jsonc
+{
+  "muxes": [
+    { "id": "herdr:default", "kind": "herdr", "session": "default", "running": true, "active": true },
+    { "id": "herdr:ztest", "kind": "herdr", "session": "ztest", "running": false },
+    { "id": "tmux", "kind": "tmux", "running": true }   // running: the server has sessions
+  ]
+}
+```
+
 ### `GET /v1/workspaces[?<session lookup>]`
 
 Enumerates the normalized two-level workspace tree of a multiplexer — the
@@ -911,9 +931,13 @@ With session-lookup params (`ssh-connection`, `mosh-port`[+`mosh-host`], or
 and `focused` marks the caller's current branch. Without them — a loopback
 desktop client has no terminal session — the mux resolves to herdr when its
 server responds, or the default tmux server otherwise, and no group is marked
-focused. `422` when the
+focused; `mux=herdr:<session>` / `mux=tmux` pins another local mux instead
+(see `GET /v1/muxes`). The same optional `mux` param rides every loopback
+`/v1/workspaces/*` call and, as a `mux` field, the `/events` watch frame.
+`422` when the
 terminal's mux is unsupported (zellij) or, for loopback, when no local mux
-exists.
+exists (or the pinned herdr session is not running); `400` on a malformed
+`mux` value.
 
 ```jsonc
 {
@@ -932,10 +956,27 @@ exists.
       "contextRemaining": 42,                     // 1..100; omitted when unknown
       "cwd": "/Users/me/projects/app-moshi",
       "paneCount": 1, "stateChangeOrder": 18
+    }, {
+      "id": "wB:t2", "label": "2", "focused": false,
+      "cwd": "/Users/me/projects/app-moshi",
+      "command": "node",                         // shell tab with a job in the foreground
+      "paneCount": 1
     }]
   }]
 }
 ```
+
+`command` marks a terminal that has something running: the base name of the
+foreground process of a shell (non-agent) tab or pane — `node`, `vim`, `go` —
+omitted when the pane is sitting at its prompt, when the tab hosts an agent
+(its `agentStatus` says what it is doing), or when nothing can be resolved.
+Shells, login wrappers, and nested multiplexers (`tmux`, `zellij`, `screen`,
+`herdr`) count as idle. tmux reads it from `#{pane_current_command}`; herdr
+from `pane.process_info` (the first non-shell process of the foreground job).
+On a multi-pane shell tab the focused pane's job wins, else the first busy
+pane's. It is sampled on the tree tick (~1s), so sub-second commands never
+show; long-lived but idle programs (an editor, a dev server) do — the field
+answers "is something running here", not "is it busy".
 
 `title` is the session's conversation title, filled for session-bearing nodes
 (tabs here, panes on `/v1/workspaces/panes`, and the `agentStatus` watch
