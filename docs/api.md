@@ -677,7 +677,11 @@ picker without maintaining their own support list.
 
 `current` is read from durable agent state and, where available, refined from
 the latest native transcript events so a model changed inside the TUI is not
-reported from stale hook state. A current model need not appear in `models`:
+reported from stale hook state. Grok is refined from its session `summary.json`
+(`current_model_id`, `reasoning_effort`) instead: Grok rewrites that file the
+moment `/model` or `/effort` runs, while the transcript's `_meta.modelId` is
+stamped per user message, never revised, and carries no effort at all. A
+current model need not appear in `models`:
 catalogs are versioned suggestions, while account-specific and custom model IDs
 remain valid session state.
 
