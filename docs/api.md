@@ -492,10 +492,14 @@ tier, or a version profile:
 }
 ```
 
-#### Watch protocol (loopback clients)
+#### Watch protocol
 
-A connected client with no terminal session of its own (the web app) can
-send a watch request at any time to subscribe to server-side pushes:
+A connected client can send a watch request at any time to subscribe to
+server-side pushes. On a session-scoped `/events` connection (SSH, Mosh, or
+ET lookup), workspace trees follow the resolved terminal’s mux/session,
+including its tmux socket. The watch `mux` selection is ignored for those
+connections. Without a session lookup, workspace trees use the loopback mux
+selection (Herdr by default); `context: true` enables loopback context pushes.
 
 ```jsonc
 { "watch": { "workspaces": true, "agent": { "source": "claude", "session": "agent-session-id" }, "context": true } }
