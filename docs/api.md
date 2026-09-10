@@ -385,8 +385,10 @@ suppress_nested_agent_push = false
 suppress_push_while_unlocked = false
 # Optional HTTP probe allowlist for Browser Preview discovery. Omit it (or use
 # "all") to scan every eligible loopback listener. An empty array disables
-# HTTP probing entirely.
+# HTTP probing entirely. Entries are single ports or inclusive "lo-hi" ranges,
+# so listing the range you want is also how you leave other ports alone.
 #   moshi-hook set scan-ports 3000,5173,8000
+#   moshi-hook set scan-ports 3000,8000-8010
 #   moshi-hook set scan-ports none
 scan_ports = "all"
 ```
@@ -403,6 +405,7 @@ See `docs/design/client-mode.md` for the full design. Bare `moshi` serves the em
 
 - The built app-moshi assets (populate with `scripts/build-webapp.sh`) are served by the foreground web listener on `127.0.0.1:24544`; extensionless paths fall back to the SPA shell. `/gateway/*`, `/events`, `/hosts/*`, `/v1/*`, and `/apps/*` proxy to the daemon at `127.0.0.1:24543`, preserving same-origin HTTP and WebSocket behavior. Ctrl-C stops the web listener without stopping agent hooks.
 - `/hosts/<name>/<rest>` reverse-proxies `<rest>` (HTTP and WebSocket) to `127.0.0.1:24543` on `<name>` via `ssh -W` with `ControlMaster` reuse. `<name>` is any syntactically safe ssh destination (optional `user@` + hostname — config aliases and MagicDNS names alike; the daemon reads no ssh config of its own, clients remember their own host lists); unsafe names are `404`, ssh failures are `502` with the last ssh stderr line included (e.g. `Permission denied (publickey)`). BatchMode is forced: hosts needing interactive auth (passwords, locked agents like 1Password) fail fast — verify with plain `ssh <name>` first.
+- `GET /v1/pty?mux=herdr&hideSidebar=true` sets `[ui] sidebar_collapsed_mode = "hidden"` in the host’s shared Herdr config and reloads the selected session before attaching; `false` sets `"compact"`. This affects other clients using that config and only changes the collapsed rail: collapse the sidebar in Herdr to hide it. Omit the parameter to leave configuration untouched. Requires Bash, Perl, and a Herdr version supporting `sidebar_collapsed_mode` (no `--hide-sidebar` flag). Respects `HERDR_CONFIG_PATH` and `XDG_CONFIG_HOME`; SSH edits run on the remote host. Windows hosts do not support this option. POST to the same URL applies the setting and reloads config without opening or closing a PTY. The app uses POST when the preference changes, including for parked terminals. Use your Herdr prefix followed by B (or your custom sidebar binding) to collapse or expand.
 - `GET /v1/pty?mux=…&host=<name>` runs the multiplexer attach through `ssh -t <name>` on a locally-owned PTY; terminal bytes never transit the remote gateway.
 - `POST /v1/hosts/forward` `{"host": "<name>", "ports": [3000, …]}` opens same-port ssh local forwards (`127.0.0.1:<p>` → remote `127.0.0.1:<p>`, max 16 per request) on the host's ControlMaster, so the client can load a remote dev server or simulator preview at `http://localhost:<p>` per the same-port doctrine (no path-prefix reverse proxy — see Transport under `/events`). Idempotent per live master; forwards die with it (ControlPersist reaps an idle master after 10 minutes) and the next request re-establishes them. Unsafe host names are `400`, ssh failures `502` with the last stderr line. A local port collision is detected before the mux request and surfaces as a plain-language `502` (a leftover forward held by the live master is cancelled and re-added instead); the URL is never rewritten to a different port.
 - `GET /v1/hosts/forwards` lists the live tunnels on this machine as `{"forwards": [{"host", "port", "pid"?}]}` — daemon bookkeeping (pruned when the local port has come free) merged with every discovered ssh-owned listener (hand-rolled `ssh -L`, or daemon forwards a restart forgot; `host` is parsed best-effort from the ssh command line, `pid` is the listener's). `POST /v1/hosts/unforward` `{"host", "port", "pid"?}` tears one down: a bridgeable host gets a mux cancel; otherwise the pid — verified to still be an ssh listener on that port — is terminated. Idempotent, judged by the local port coming free rather than ssh's unreliable `-O cancel` exit code. Both act on the LOCAL daemon only; tunnels are invisible to the remote gateway. Discovery never lists ssh-owned listeners as dev servers — a tunnel answers probes with the remote end's content and belongs in the tunnels list.
@@ -877,6 +880,15 @@ herdr only), and the pane's existence is re-checked before any input is sent.
 // response
 { "ok": true, "source": "claude", "sessionId": "agent-session-id" }
 ```
+
+For an agent with no observable session ID yet (for example Codex after
+`/new`), send `{ "source": "codex", "pane": "<pane-id>", "text": "hello" }`.
+With a session lookup, the pane must exactly match the caller's resolved live
+terminal, which must still run the expected agent without a session ID.
+A mismatch returns `409` before input; remote tab-only addresses are rejected
+with `400`. The resolved context supplies the mux session and socket, so a
+pane address cannot select a different terminal. Loopback clients may address
+an agent by pane or tab, checked against the live mux agent list.
 
 Multi-line text is wrapped in bracketed-paste markers so harnesses that enable
 bracketed paste keep the newlines in the composer instead of submitting on
