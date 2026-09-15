@@ -986,6 +986,18 @@ exists (or the pinned herdr session is not running); `400` on a malformed
 }
 ```
 
+Herdr children include `panes` in this response and in `/events` workspace
+frames, using the same pane fields as `/v1/workspaces/panes`. An empty list
+(`"panes": []`) means loaded and empty; an absent field means panes must be
+fetched separately (tmux). Clients should use inline panes immediately and
+must not replace them with an older cached pane list.
+
+The Herdr tree uses `session.snapshot` for workspaces, tabs, panes, and agents
+in one topology read. It requires that method (verified on Herdr 0.9.0,
+protocol 22); a failed or incomplete snapshot fails the tree request. Separate
+foreground-process verification remains necessary because the snapshot does
+not contain process details.
+
 `command` marks a terminal that has something running: the base name of the
 foreground process of a shell (non-agent) tab or pane — `node`, `vim`, `go` —
 omitted when the pane is sitting at its prompt, when the tab hosts an agent
@@ -999,7 +1011,7 @@ show; long-lived but idle programs (an editor, a dev server) do — the field
 answers "is something running here", not "is it busy".
 
 `title` is the session's conversation title, filled for session-bearing nodes
-(tabs here, panes on `/v1/workspaces/panes`, and the `agentStatus` watch
+(tabs and inline panes here, panes on `/v1/workspaces/panes`, and the `agentStatus` watch
 frame). It is read from the agent's own records where one exists — Claude's
 `custom-title` (user rename, wins) and `ai-title` rows in the session JSONL;
 Codex's `thread_name` in `<CODEX_HOME>/session_index.jsonl`; Grok's
@@ -1012,7 +1024,8 @@ Scans are cached and incremental, so tree ticks stay cheap.
 
 ### `GET /v1/workspaces/panes?groupId=<id>&childId=<id>[&<session lookup>]`
 
-The lazy third level: panes of one tree child, echoing the requested target so
+An explicit refresh of panes for one tree child, also used for the lazy tmux
+third level. It echoes the requested target so
 a late response can be matched to its row. Same session-lookup rules and
 loopback fallback as `/v1/workspaces`.
 
@@ -1022,15 +1035,19 @@ Focuses a workspace/tab/pane (herdr) or session/window (tmux) in the caller's
 mux. Requires the session lookup: tmux focus switches the caller's own
 attached client, which a loopback caller does not have.
 
-### `GET /v1/transcripts?session=<id>[&source=claude|codex|cursor|grok|opencode|hermes|pi|omp|kimi][&limit=<n>]`
+### `GET /v1/transcripts?session=<id>[&source=claude|codex|cursor|grok|opencode|hermes|pi|omp|kimi][&limit=<n>][&cursor=<opaque>]`
 
 Opens a local WebSocket stream for a live agent transcript. New clients should pass `source`; when omitted for backward compatibility, the gateway tries Claude first, then Codex. Claude transcripts prefer the exact per-session path captured from hook events (including `CLAUDE_CONFIG_DIR` profiles), then fall back to `~/.claude/projects` for older session state. Codex transcripts are resolved from `$CODEX_HOME/sessions` or `~/.codex/sessions` rollout files. Cursor resolves its native `~/.cursor/chats/<workspace>/<conversation-id>/store.db` and streams role-bearing message blobs in insertion order, polling the live SQLite store for appended messages. Grok streams the authoritative ACP `updates.jsonl` reported by its hooks, with a `$GROK_HOME/sessions/<encoded-cwd>/<session-id>/` scan as a fallback for older sessions. Completed Grok `image_gen` results are exposed as lazy ACP image blocks backed by the generated file, so Chat View can render them without terminal graphics support. Pi and OMP transcripts use the exact JSONL path reported by the installed extension, so profiles and custom session locations work without a directory scan. OMP validation understands its v3 fixed-width title slot before the session header. Kimi transcripts resolve through its profile-aware `session_index.jsonl` and stream the main agent's live `wire.jsonl`. OpenCode is proxied through the live local server recorded by its plugin. Transcript bytes stay on the host and are streamed only over the local forwarded gateway. If Codex resume creates a newer rollout for the same session id, reconnect to resolve the newest file.
 
-Server messages are JSON objects with `type` (`backlog`, `older`, `append`, `reset`, or `error`), `source`, physical `line` numbers, and raw JSONL rows for client-side rendering. Clients can request older rows with `{"type":"older","beforeLine":123,"limit":50}`.
+Server messages are JSON objects with `type` (`backlog`, `older`, `append`, `resumed`, `reset`, or `error`), `source`, physical `line` numbers, and raw JSONL rows for client-side rendering. Clients can request older rows with `{"type":"older","beforeLine":123,"limit":50}`.
 
 The optional `limit` query parameter shrinks the opening `backlog` page, which matters on long-haul links where the default 200-row page costs several round trips of TCP slow start. It counts **kept source rows** — the physical rows the daemon streams — not rendered chat messages; several source rows routinely collapse into one message, so a client asking for 30 rows should expect noticeably fewer. Values that are missing, unparseable, non-positive, or above the 200-row default are ignored and produce exactly the default page, so older clients are unaffected. `startLine`, `totalLines`, and `hasMore` stay physical and correct, so paging back with `older` converges on the same history as an unlimited backlog. `limit` applies to every `backlog` message on the connection, including the one re-sent after a `reset`.
 
 Oversized rows are redacted before streaming: long strings are truncated, and inline image payloads (Claude `source.data`, Grok/Pi/OMP `data`, Codex `image_url` data URLs, and OpenCode/Kimi `url` data URLs) are replaced with a stub carrying `truncated: true`, `media_type`, decoded `bytes`, and `width`/`height` when the format is recognized. Grok `image_gen`/`image_edit` file results and local source images passed to `image_edit` receive the same stub without embedding their bytes. Clients fetch the actual bytes via the blob endpoint below.
+
+The optional `cursor` resumes a previously committed transcript checkpoint. Cursors are opaque, versioned, and bound to the source, session and storage backend. The gateway validates the complete prefix (including its physical row count and byte offset) using SHA-256. An unchanged prefix produces only suffix `append` transactions followed by `resumed`, including when the suffix is empty. Large initial suffixes are committed in transactions of at most 200 physical rows. A changed or truncated prefix produces an ordinary authoritative `backlog`; the client must rebuild its reducer. A file rewrite that does not change its size is detected on reconnect; the live file tailer's equal-size fast path does not detect it immediately.
+
+A `cursor` on an `append` is the **commit marker for the entire burst**, including preceding cursorless fragments. Buffer those fragments and reduce them only after the commit marker arrives. On disconnect, discard uncommitted fragments and resume from the last committed cursor. Never use `totalLines` as a checkpoint: every fragment may report the final total before all rows have arrived. Persist the cursor and corresponding reducer inputs together. `resumed` completes catch-up without changing the oldest loaded boundary or older-page availability. `older` responses never advance the forward cursor. Materialized `backlog` responses carry a cursor; virtual pending rows do not. A cursorless backlog is still authoritative and requires a full refresh. Mutable OpenCode rows can invalidate an earlier prefix, so an active-turn reconnect may legitimately require a full refresh.
 
 ### `GET /v1/transcripts/blob?session=<id>&line=<n>[&block=<i>][&source=claude|codex|cursor|grok|opencode|hermes|pi|omp|kimi]`
 
