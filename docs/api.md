@@ -962,7 +962,7 @@ exists (or the pinned herdr session is not running); `400` on a malformed
 ```jsonc
 {
   "kind": "herdr",                              // "herdr" | "tmux"
-  "capabilities": { "paneList": true, "paneFocus": "agent-only" },
+  "capabilities": { "paneList": true, "paneFocus": "exact" },  // "agent-only" on Herdr < 0.9.0
   "groups": [{
     "id": "wB", "label": "app-moshi", "focused": true, "agentStatus": "working",
     "worktree": { /* herdr repo membership, when known */ },
@@ -993,10 +993,13 @@ fetched separately (tmux). Clients should use inline panes immediately and
 must not replace them with an older cached pane list.
 
 The Herdr tree uses `session.snapshot` for workspaces, tabs, panes, and agents
-in one topology read. It requires that method (verified on Herdr 0.9.0,
-protocol 22); a failed or incomplete snapshot fails the tree request. Separate
-foreground-process verification remains necessary because the snapshot does
-not contain process details.
+in one topology read (verified on Herdr 0.9.0, protocol 22); a failed or
+incomplete snapshot fails the tree request. A server that predates the method
+answers it with `invalid_request`, and the daemon then assembles the same
+topology from `workspace.list`, per-workspace `tab.list`, `pane.list`, and
+`agent.list`, so Herdr releases before 0.9.0 keep working; such trees advertise
+`"paneFocus": "agent-only"`. Separate foreground-process verification remains
+necessary because neither path contains process details.
 
 `command` marks a terminal that has something running: the base name of the
 foreground process of a shell (non-agent) tab or pane — `node`, `vim`, `go` —
@@ -1033,7 +1036,13 @@ loopback fallback as `/v1/workspaces`.
 
 Focuses a workspace/tab/pane (herdr) or session/window (tmux) in the caller's
 mux. Requires the session lookup: tmux focus switches the caller's own
-attached client, which a loopback caller does not have.
+attached client, which a loopback caller does not have. Herdr pane targets use
+`pane.focus` for both agents and shells, so attached terminals follow the
+selection even after client-local navigation (Herdr 0.9.0 and newer). When the
+server rejects `pane.focus` as unsupported, the daemon falls back to the older
+contract: `agent.focus` for agent panes, and a bounded neighbor-by-neighbor
+focus walk toward shell panes; a walk that cannot reach the pane reports the
+`not-an-agent-pane` fallback reason.
 
 ### `GET /v1/transcripts?session=<id>[&source=claude|codex|cursor|grok|opencode|hermes|pi|omp|kimi][&limit=<n>][&cursor=<opaque>]`
 
