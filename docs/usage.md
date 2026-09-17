@@ -285,6 +285,25 @@ moshi-hook context --et-client-id abcdefghijklmnop
 
 Default `install` skips a managed file when the agent's config root is missing, for example `~/.cursor` or `~/.gemini`. Passing `--target` preserves the old create-if-missing behavior for that target.
 
+### Repairing the OpenCode integration
+
+If Integrations says the OpenCode plugin is missing or outdated (older daemons
+say "plugin differs from current installer output"), run
+`moshi-hook install --target opencode` **on that host**, then restart OpenCode.
+For a project-local installation, run the command in that project with `--local`.
+The check compares the entire generated file, including the helper binary path.
+A Moshi upgrade, manual edits, or installing/checking with different binary paths
+can therefore trigger it. Reinstallation replaces the generated plugin; keep
+custom plugins in separate files. The existing Integrations install action also
+rewrites the host's global plugin.
+
+The generated plugin has separate V1 `server` and V2 `setup` entrypoints, so
+OpenCode 2.x does not need a manually edited plugin. With OpenCode 2.x, launch
+`opencode --standalone` for pane-bound Chat View and Stop: the default shared
+background service does not carry the current terminal's identity. The V2
+transcript relay reads OpenCode's public `session.context` API; history removed
+from that context by compaction is not available through this API.
+
 Hermes Agent keeps its conversation history in `$HERMES_HOME/state.db` rather than in per-session transcript files. Chat View reads that database through Moshi's bundled read-only SQLite driver; no separate `sqlite3` command is required.
 
 Kimi's managed install targets the current Kimi Code lifecycle, including native `PermissionRequest` / `PermissionResult`, interruption, failure, and session-end callbacks. Approval hooks are observation-only: Kimi's terminal prompt remains authoritative while Moshi mirrors and can drive that verified prompt.
