@@ -178,6 +178,12 @@ Antigravity uses its global command-hook configuration. Moshi registers only
 model-invocation and stop lifecycle hooks; it does not register a tool-policy
 hook or change Antigravity's native approval behavior.
 
+Antigravity CLI 1.2.5 supports full Chat View through its native SQLite
+conversation store. In Herdr, Moshi follows `/new` before the first prompt.
+Escape interrupts the active response; Antigravity records this in its CLI log
+without calling `Stop`, so Moshi watches that native record to retire the turn.
+Background tasks retain Antigravity's native Escape behavior.
+
 | Agent behavior | Moshi behavior |
 | --- | --- |
 | Model invocation begins | Publishes or updates `session_started` once per visible turn |
