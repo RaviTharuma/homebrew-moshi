@@ -881,6 +881,24 @@ herdr only), and the pane's existence is re-checked before any input is sent.
 { "ok": true, "source": "claude", "sessionId": "agent-session-id" }
 ```
 
+Desktop/web composers can preserve clipboard blocks separately from the typed
+instruction in the same request:
+
+```json
+{ "source": "claude", "sessionId": "agent-session-id", "text": "Summarize this", "textMode": "typed", "pastedText": ["reference text"] }
+```
+
+`pastedText` accepts up to 16 nonempty blocks. Each is delivered as bracketed
+paste before `text`; one final Enter submits the whole message. With
+`textMode: "typed"`, the instruction is written once without paste markers;
+line breaks use Meta-Enter to avoid submitting early. Native agents may still
+classify large writes as pasted input. Omitting `textMode` preserves the
+existing multiline bracketed-paste behavior. Paste-only requests may use an
+empty `text`. The JSON body limit remains 1 MiB. Invalid blocks are rejected
+before injection. Do not automatically retry failed submissions: earlier
+blocks may already be in the native composer. Older daemons reject these new
+fields before writing any input.
+
 For an agent with no observable session ID yet (for example Codex after
 `/new`), send `{ "source": "codex", "pane": "<pane-id>", "text": "hello" }`.
 With a session lookup, the pane must exactly match the caller's resolved live
