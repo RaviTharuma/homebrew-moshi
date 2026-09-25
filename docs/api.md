@@ -432,7 +432,8 @@ The first snapshot identifies the hook and its additive API capabilities:
       "transcripts.limit",
       "terminal.prompt",
       "terminal.keys",
-      "workspaces.live-session"
+      "workspaces.live-session",
+      "events.watch.usage"
     ]
   }
 }
@@ -505,10 +506,10 @@ connections. Without a session lookup, workspace trees use the loopback mux
 selection (Herdr by default); `context: true` enables loopback context pushes.
 
 ```jsonc
-{ "watch": { "workspaces": true, "agent": { "source": "claude", "session": "agent-session-id" }, "context": true } }
+{ "watch": { "workspaces": true, "agent": { "source": "claude", "session": "agent-session-id" }, "context": true, "usage": true } }
 ```
 
-The gateway acks with `{"watching": {"workspaces": true, "agent": true, "context": true}}`
+The gateway acks with `{"watching": {"workspaces": true, "agent": true, "context": true, "usage": true}}`
 and then pushes frames whenever their content changes (workspaces and context
 on a 1 s tick, agent status on a 250 ms tick, all deduped by JSON):
 
@@ -548,6 +549,21 @@ on a 1 s tick, agent status on a 250 ms tick, all deduped by JSON):
       "openedAt": 1787219608.6
     }
 } }
+```
+
+`usage: true` (capability `events.watch.usage`) pushes this machine's agent
+account rate-limit windows — the same local reads as `moshi-hook usage`, taken
+from each agent's own credential/cache files, never from the Moshi server, so
+it works unpaired. The current list arrives right after the ack (once the
+daemon has collected; nothing while usage collection is off), then again
+whenever it changes. The list replaces the previous one:
+
+```jsonc
+{ "usage": [ {
+    "accountId": "…", "accountLabel": "Max", "agent": "claude-code",
+    "hostName": "laptop", "capturedAt": "2026-09-25T03:00:00Z",
+    "windows": [ { "label": "5h", "usedPercentage": 42, "resetsAt": "2026-09-25T06:00:00Z" } ]
+} ] }
 ```
 
 `pendingApproval` is the live tool-approval interaction from the daemon's TUI
