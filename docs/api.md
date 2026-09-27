@@ -154,6 +154,7 @@ Every frame uses the same shape. Fields are optional, interpreted per `type`. Un
 | Hook → daemon | `approval.request` | Block until daemon returns a decision. Used by blocking approval adapters. |
 | Hook → daemon | `session.update` | Notify daemon of session state change. Claude/Codex/Hermes terminal approvals use this with `category:"approval_required"` and, when a terminal target is available, `actionId` + `phase:"waitingForApproval"`. |
 | Hook → daemon | `session.closed` | Session ended. |
+| Hook → daemon | `session.bind` | The terminal pane in the envelope now shows `sessionId` (OpenCode 2 TUI plugin; `agentPid` is the TUI process). The daemon moves that pane off every other session without ending them; an empty `sessionId` only releases the pane. Never published as a push. |
 | Daemon → hook | `approval.response` | Decision for prior `approval.request` (matched by `actionId`). |
 | Daemon → hook | `ack` | Ack of a fire-and-forget message. |
 | Daemon → hook | `error` | Protocol/transport error. |
