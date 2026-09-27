@@ -384,6 +384,14 @@ suppress_nested_agent_push = false
 # read, the push is sent.
 #   moshi-hook set suppress-push-while-unlocked on
 suppress_push_while_unlocked = false
+# Periodically `git fetch` the upstream branch of repos shown in workspace
+# summaries and diff sessions, so "behind" counts include commits pushed
+# elsewhere. Off by default: fetching uses your git credentials, and an SSH
+# agent (1Password, Secretive) or Keychain may ask for approval each time.
+# A repo whose fetch fails is not retried until the daemon restarts. With it
+# off, behind counts are as of your own last fetch.
+#   moshi-hook set git-background-fetch on
+git_background_fetch = false
 # Optional HTTP probe allowlist for Browser Preview discovery. Omit it (or use
 # "all") to scan every eligible loopback listener. An empty array disables
 # HTTP probing entirely. Entries are single ports or inclusive "lo-hi" ranges,
