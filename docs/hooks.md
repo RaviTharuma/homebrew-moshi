@@ -278,7 +278,8 @@ every 30s), and viewers of one thread share a single cached export.
 Neither exposes a hook that can answer an approval before its own policy
 runs, so approvals stay in the terminal. Copilot also gets Chat View: the
 gateway rewrites its `events.jsonl` conversation into Claude-shaped rows.
-Droid is inbox-only.
+Droid's session JSONL already uses Claude content blocks, so Chat View unwraps
+it and hides TUI-only rows (hook status lines, plan notices).
 
 | Agent behavior | Moshi behavior |
 | --- | --- |
