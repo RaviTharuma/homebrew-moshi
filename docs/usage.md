@@ -17,7 +17,7 @@ The PowerShell installer verifies the published ZIP checksum, installs without
 elevation into versioned per-user directories, and places a stable junction on
 the user `PATH`. See [windows.md](windows.md) for the beta support boundary.
 
-After step 2, supported agents route their hooks through `moshi-hook`: Claude Code, Codex, OpenCode, Gemini CLI, Antigravity, Cursor, Kimi, Qwen Code, Grok Build, OMP (Oh My Pi), Pi, and Hermes Agent. The daemon (`serve`) holds the WebSocket to Moshi and the local Unix socket that hooks talk to.
+After step 2, supported agents route their hooks through `moshi-hook`: Claude Code, Codex, OpenCode, Gemini CLI, Antigravity, Cursor, Kimi, Qwen Code, Qoder CLI, Factory Droid, GitHub Copilot CLI, Amp, Devin CLI, Grok Build, OMP (Oh My Pi), Pi, and Hermes Agent. The daemon (`serve`) holds the WebSocket to Moshi and the local Unix socket that hooks talk to.
 
 ## Local web client
 
@@ -192,7 +192,7 @@ never uses, refreshes, or rewrites the refresh token.
 | `host revoke <id>` | Remove a Moshi host SSH key from `authorized_keys`. |
 | `host enable-ssh` | Help enable SSH prerequisites on macOS. |
 | `diff [path] [--no-open] [--port N]` | Serve the embedded Git diff viewer for a local project directory. |
-| `install` | Write Moshi entries into supported agent config files. By default, only installs targets whose config root already exists and reports missing agents as skipped. Use `--target claude,codex,opencode,gemini,antigravity,cursor,kimi,qwen,grok,omp,pi,hermes` to force or limit the set. Non-destructive: leaves user-owned hooks alone. OpenCode installs globally by default; use `--local` for `.opencode/plugins` in the current project. When Codex 0.157+ is installed with its shared background server on, `install` asks whether to turn it off (non-interactive runs print a pointer to `doctor`). |
+| `install` | Write Moshi entries into supported agent config files. By default, only installs targets whose config root already exists and reports missing agents as skipped. Use `--target claude,codex,opencode,gemini,antigravity,cursor,kimi,qwen,qoder,droid,copilot,amp,devin,grok,omp,pi,hermes` to force or limit the set. Non-destructive: leaves user-owned hooks alone. OpenCode installs globally by default; use `--local` for `.opencode/plugins` in the current project. When Codex 0.157+ is installed with its shared background server on, `install` asks whether to turn it off (non-interactive runs print a pointer to `doctor`). |
 | `uninstall` | Remove Moshi-owned entries from those files. For OpenCode, pass `--local` to remove a project-local install. |
 | `service install` | Linux: install and start a systemd user service. Windows groundwork: register current-user logon startup under `HKCU\...\Run` and start a detached daemon without elevation. |
 | `service uninstall` | Disable/remove the Linux systemd service or Windows logon value and stop the daemon. |
@@ -210,7 +210,7 @@ never uses, refreshes, or rewrites the refresh token.
 | `logs [-f]` | Tail the daemon log. |
 | `version` | Version, commit SHA, build date. |
 
-Hidden subcommands (`claude-hook`, `codex-hook`, `opencode-event`, `opencode-permission`, `gemini-hook`, `antigravity-hook`, `cursor-hook`, `kimi-hook`, `qwen-hook`, `grok-hook`, `omp-hook`, `pi-hook`, `hermes-hook`) are invoked by the agents themselves through the configs `install` writes — you won't run them by hand.
+Hidden subcommands (`claude-hook`, `codex-hook`, `opencode-event`, `opencode-permission`, `gemini-hook`, `antigravity-hook`, `cursor-hook`, `kimi-hook`, `qwen-hook`, `qoder-hook`, `droid-hook`, `copilot-hook`, `amp-hook`, `devin-hook`, `grok-hook`, `omp-hook`, `pi-hook`, `hermes-hook`) are invoked by the agents themselves through the configs `install` writes — you won't run them by hand.
 
 ### `cwd-list` — recent project directories
 
@@ -279,6 +279,11 @@ moshi-hook context --et-client-id abcdefghijklmnop
 | Cursor | `$CURSOR_CONFIG_DIR/hooks.json` or `~/.cursor/hooks.json` |
 | Kimi | `$KIMI_CODE_HOME/config.toml` or `~/.kimi-code/config.toml` (`KIMI_SHARE_DIR` remains supported for legacy kimi-cli) |
 | Qwen Code | `~/.qwen/settings.json` |
+| Qoder CLI | `~/.qoder/settings.json` (or `$QODER_CONFIG_DIR/settings.json`) |
+| Factory Droid | `~/.factory/hooks.json` (the legacy `~/.factory/hooks/hooks.json` while only it exists) |
+| GitHub Copilot CLI | `~/.copilot/hooks/moshi-hooks.json` (or `$COPILOT_HOME/hooks/`) |
+| Amp | `~/.config/amp/plugins/moshi-hooks.ts` (or `$XDG_CONFIG_HOME/amp/plugins/`) |
+| Devin CLI | `~/.config/devin/config.json` (`hooks` key) |
 | Grok Build | `$GROK_HOME/hooks/moshi-hooks.json` or `~/.grok/hooks/moshi-hooks.json` |
 | OMP (Oh My Pi) | `$OMP_CODING_AGENT_DIR/extensions/moshi-hooks.ts`, `$OMP_PROCESSING_AGENT_DIR/extensions/moshi-hooks.ts`, `$PI_CODING_AGENT_DIR/extensions/moshi-hooks.ts`, `$PI_CONFIG_DIR/agent/extensions/moshi-hooks.ts`, `~/.omp/profiles/$OMP_PROFILE/agent/extensions/moshi-hooks.ts`, or `~/.omp/agent/extensions/moshi-hooks.ts` |
 | Pi | `$PI_CODING_AGENT_DIR/extensions/moshi-hooks.ts`, `$PI_CONFIG_DIR/agent/extensions/moshi-hooks.ts`, or `~/.pi/agent/extensions/moshi-hooks.ts` |

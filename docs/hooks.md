@@ -214,6 +214,87 @@ actions stay local for the same reason: Run Everything has already removed the
 human decision. Reasoning traces, editor-internal events, file watchers, and
 streaming partials are not surfaced.
 
+### Qoder CLI
+
+Qoder CLI copies Claude Code's hook protocol, so Moshi installs the same event
+set into `~/.qoder/settings.json` (or `$QODER_CONFIG_DIR/settings.json`).
+Chat View reads Qoder's Claude-format JSONL from the exact path its hooks
+report.
+
+| Agent behavior | Moshi behavior |
+| --- | --- |
+| User submits a prompt | Publishes or updates `session_started` |
+| Permission request | Publishes `approval_required`; a remote allow or deny answers Qoder |
+| Permission answered in the terminal | The remote request closes as "Answered in terminal" when the turn ends |
+| Agent stops | Publishes `task_complete` with the final reply |
+| Subagent lifecycle (payload carries `agent_id`) | Not surfaced |
+
+Qoder shows its own prompt while the permission hook waits and does not cancel
+the hook when the terminal answer wins, so Moshi retires that request on the
+session's next turn event.
+
+### Devin CLI
+
+Devin reads Claude-shaped hook groups from the `hooks` key of
+`~/.config/devin/config.json`. Its matchers are regexes, so Moshi's entries
+omit them (Devin treats an omitted matcher as "all"). Devin has no `cwd` in
+its payloads; Moshi uses `DEVIN_PROJECT_DIR` to bind the terminal pane.
+
+| Agent behavior | Moshi behavior |
+| --- | --- |
+| User submits a prompt | Publishes or updates `session_started` |
+| Permission request | Publishes `approval_required`; Devin waits for the hook, so the remote allow or deny answers it (`{"decision":"approve"\|"block"}`) |
+| Agent stops | Publishes `task_complete` |
+
+Chat View reads Devin's per-session ATIF document
+(`~/.local/share/devin/cli/transcripts/<id>.json`), converted into
+Claude-shaped rows by the gateway.
+
+Devin also loads `~/.claude` hooks by default (`read_config_from.claude`).
+Moshi's Claude hook stays inert whenever `DEVIN_PROJECT_DIR` is set, so those
+imported copies never surface Devin turns as Claude sessions.
+
+### Amp
+
+Amp has no shell hooks. Moshi installs a Bun plugin at
+`~/.config/amp/plugins/moshi-hooks.ts` that forwards `agent.start` and
+`agent.end` (with the final assistant text) to `moshi-hook amp-hook`. Plugins
+cannot see Amp's own approval prompt, so approvals are not surfaced.
+
+Amp keeps threads on its servers, so Chat View runs `amp threads export` while
+a Chat View stream is open. The plugin touches a per-thread marker on every
+turn and tool result; the gateway re-exports only when that marker moves (or
+every 30s), and viewers of one thread share a single cached export.
+
+| Agent behavior | Moshi behavior |
+| --- | --- |
+| User submits a prompt | Publishes or updates `session_started` |
+| Agent finishes the turn | Publishes `task_complete` with the final reply |
+| Tool approval | Not surfaced |
+| Conversation | Chat View via `amp threads export`, refreshed on Amp activity |
+
+### Factory Droid and GitHub Copilot CLI
+
+Neither exposes a hook that can answer an approval before its own policy
+runs, so approvals stay in the terminal. Copilot also gets Chat View: the
+gateway rewrites its `events.jsonl` conversation into Claude-shaped rows.
+Droid is inbox-only.
+
+| Agent behavior | Moshi behavior |
+| --- | --- |
+| User submits a prompt | Publishes or updates `session_started` |
+| Waiting on a permission prompt or question (`Notification`) | Publishes `approval_required` with "Answer in terminal" |
+| A tool runs after the prompt | Clears the waiting state without publishing |
+| Agent stops | Publishes `task_complete` |
+
+Droid hooks live in `~/.factory/hooks.json`. Because Droid lets that file
+replace `settings.json` hooks event by event, install first copies any
+`settings.json` hooks for the events Moshi adds. Droid subagents (run with
+`DROID_PARENT_SESSION_ID`) are not surfaced. Copilot hooks live in a
+Moshi-owned `~/.copilot/hooks/moshi-hooks.json`; Moshi does not install
+Copilot's `permissionRequest`, which fires before Copilot's own allow/deny
+policy and so cannot tell a real prompt from an auto-approved tool.
+
 ---
 
 ## Events We Do Not Surface
