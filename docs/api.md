@@ -442,7 +442,12 @@ The first snapshot identifies the hook and its additive API capabilities:
       "terminal.prompt",
       "terminal.keys",
       "workspaces.live-session",
-      "events.watch.usage"
+      "approvals.answer",
+      "events.watch.usage",
+      "events.doctor",
+      "update.check",
+      "update.apply",
+      "settings"
     ]
   }
 }
@@ -885,6 +890,89 @@ a daemon running without its TUI bridge `503`. The resolved state reaches
 clients as the next agentStatus frame (the `pendingApproval` field disappears
 and the status leaves `blocked`).
 
+### `GET /v1/update/status`, `POST /v1/update/check`, `POST /v1/update/apply`
+
+The daemon's release updater (capabilities `update.check` and `update.apply`).
+Its state also rides the `doctor` frame on `/events` as `doctor.update`, so a
+client that shows the doctor report sees installs progress without polling.
+
+```jsonc
+{
+  "ok": true,
+  "update": {
+    "current": "v0.4.8",
+    "latest": "v0.4.9",                  // absent until the first check
+    "available": true,
+    "mode": "ask",                       // auto_update: "off" | "ask" | "auto"
+    "canApply": true,                    // false for dev builds and Homebrew
+                                         // installs outside a Cellar layout
+    "install": "homebrew",               // "homebrew" | "standalone" | "dev"
+    "state": "idle",                     // idle | checking | waiting |
+                                         // installing | restarting
+    "error": "install failed: …",        // last check/install failure
+    "checkedAt": "2026-09-29T10:00:00Z"
+  }
+}
+```
+
+`status` returns the current state. `check` asks the CDN now — whatever the
+mode, `off` included — and answers `200` with the result (or the unchanged
+state after 20 seconds). `apply` is the user's explicit go-ahead: it re-checks,
+and when a newer release exists installs it (`brew upgrade` for Homebrew
+installs, the checksummed CDN archive otherwise), runs the new binary's
+`version` to confirm it, waits until no approval or terminal prompt is
+pending, and restarts the daemon in place. It answers `202` with the state
+at the time of the request; an install that cannot update itself answers
+`409`, a daemon without an updater `503`. The gateway drops briefly during the
+restart; clients reconnect and read the new `version`.
+
+With `auto_update = "ask"` (the default) the daemon also sends one silent
+`update_available` host event per new release, so the app can flag the host
+without a connection open:
+
+```jsonc
+// POST /hosts/:hostId/events
+{
+  "type": "agent_state_update",
+  "category": "update_available",
+  "hostId": "…",
+  "currentVersion": "0.4.8",
+  "latestVersion": "0.4.9",
+  "updatedAt": "2026-09-29T10:00:00Z"
+}
+```
+
+### `GET /v1/settings`, `POST /v1/settings`
+
+The daemon's `moshi-hook set` settings (capability `settings`), for the app's
+hooks sheet. `GET` returns every on/off option this OS supports plus the
+auto-update mode:
+
+```jsonc
+{
+  "ok": true,
+  "settings": {
+    "options": [
+      {
+        "name": "git-background-fetch",   // `moshi-hook set` spelling
+        "summary": "fetch upstream every 5m …",
+        "value": true,
+        "default": false,
+        "pending": true                   // saved, applies on next restart
+      }
+    ],
+    "autoUpdate": "ask"                   // "off" | "ask" | "auto"
+  }
+}
+```
+
+`POST {"name": "git-background-fetch", "value": "on"}` writes config.toml the
+way `moshi-hook set` does (comments and other keys preserved) and answers with
+the same shape. Options take `on`/`off`; `auto-update` takes `off`, `ask`, or
+`auto` and applies at once (a non-`off` mode also triggers a release check, so
+`auto` installs a waiting release). An unknown name or bad value answers
+`400`, a daemon without the controller `503`.
+
 ### `POST /v1/prompt[?<session lookup>]`
 
 Types a free-form prompt into the pane running the given agent session and
@@ -1119,7 +1207,7 @@ contract: `agent.focus` for agent panes, and a bounded neighbor-by-neighbor
 focus walk toward shell panes; a walk that cannot reach the pane reports the
 `not-an-agent-pane` fallback reason.
 
-### `GET /v1/transcripts?session=<id>[&source=claude|codex|cursor|grok|opencode|hermes|pi|omp|kimi|antigravity|qoder|devin|copilot|amp|droid][&limit=<n>][&cursor=<opaque>]`
+### `GET /v1/transcripts?session=<id>[&source=claude|codex|cursor|grok|opencode|hermes|pi|omp|omo|kimi|antigravity|qoder|devin|copilot|amp|droid|jcode|goose][&limit=<n>][&cursor=<opaque>]`
 
 Opens a local WebSocket stream for a live agent transcript. New clients should pass `source`; when omitted for backward compatibility, the gateway tries Claude first, then Codex. Claude transcripts prefer the exact per-session path captured from hook events (including `CLAUDE_CONFIG_DIR` profiles), then fall back to `~/.claude/projects` for older session state. Codex transcripts are resolved from `$CODEX_HOME/sessions` or `~/.codex/sessions` rollout files. Cursor resolves its native `~/.cursor/chats/<workspace>/<conversation-id>/store.db` and streams role-bearing message blobs in insertion order, polling the live SQLite store for appended messages. Grok streams the authoritative ACP `updates.jsonl` reported by its hooks, with a `$GROK_HOME/sessions/<encoded-cwd>/<session-id>/` scan as a fallback for older sessions. Completed Grok `image_gen` results are exposed as lazy ACP image blocks backed by the generated file, so Chat View can render them without terminal graphics support. Pi and OMP transcripts use the exact JSONL path reported by the installed extension, so profiles and custom session locations work without a directory scan. OMP validation understands its v3 fixed-width title slot before the session header. Kimi transcripts resolve through its profile-aware `session_index.jsonl` and stream the main agent's live `wire.jsonl`. Qoder writes Claude-format JSONL, so it reuses the Claude reader: the exact path from its hooks wins, with `$QODER_CONFIG_DIR/projects` or `~/.qoder/projects` as the fallback search root. Devin CLI keeps each session as one ATIF JSON document under `$XDG_DATA_HOME/devin/cli/transcripts/<id>.json` (default `~/.local/share/devin/cli/transcripts`); the gateway reloads it on each poll and converts its steps into Claude-shaped `user`/`assistant` rows (tool calls become `tool_use`, observations `tool_result`), so clients reuse their Claude reducer. GitHub Copilot CLI appends session events to `$COPILOT_HOME/session-state/<id>/events.jsonl` (default `~/.copilot`); the gateway keeps `user.message`, `assistant.message` and `tool.execution_complete` rows and rewrites them into Claude-shaped rows (built-in tools renamed to Read/Edit/Write/Bash/Grep). Amp keeps threads on its servers: the gateway runs `amp threads export <id>` while a stream is open and converts the messages into Claude-shaped rows. The Moshi Amp plugin touches `<state>/amp-activity/<thread>` on each turn and tool result; the poll only stats that marker and re-exports when it moved (or every 30s), sharing one cached export across viewers. Factory Droid transcripts resolve from the exact path its hooks report (fallback `~/.factory/sessions/*/<id>.jsonl`); the filter unwraps its Claude-compatible `message` rows and drops TUI-only rows (`visibility: "user_only"`) and `context-*` system reminders. OpenCode is proxied through the live local server recorded by its plugin. Transcript bytes stay on the host and are streamed only over the local forwarded gateway. If Codex resume creates a newer rollout for the same session id, reconnect to resolve the newest file.
 
@@ -1133,7 +1221,7 @@ The optional `cursor` resumes a previously committed transcript checkpoint. Curs
 
 A `cursor` on an `append` is the **commit marker for the entire burst**, including preceding cursorless fragments. Buffer those fragments and reduce them only after the commit marker arrives. On disconnect, discard uncommitted fragments and resume from the last committed cursor. Never use `totalLines` as a checkpoint: every fragment may report the final total before all rows have arrived. Persist the cursor and corresponding reducer inputs together. `resumed` completes catch-up without changing the oldest loaded boundary or older-page availability. `older` responses never advance the forward cursor. Materialized `backlog` responses carry a cursor; virtual pending rows do not. A cursorless backlog is still authoritative and requires a full refresh. Mutable OpenCode rows can invalidate an earlier prefix, so an active-turn reconnect may legitimately require a full refresh.
 
-### `GET /v1/transcripts/blob?session=<id>&line=<n>[&block=<i>][&source=claude|codex|cursor|grok|opencode|hermes|pi|omp|kimi|antigravity|qoder|devin|copilot|amp|droid]`
+### `GET /v1/transcripts/blob?session=<id>&line=<n>[&block=<i>][&source=claude|codex|cursor|grok|opencode|hermes|pi|omp|omo|kimi|antigravity|qoder|devin|copilot|amp|droid|jcode|goose]`
 
 Serves the raw image bytes of one content block of one transcript line, re-read from disk or re-fetched from OpenCode on demand (so redaction never loses data). `line` is the physical transcript line index reported by the stream; `block` (default 0) indexes `message.content[i]` for Claude/Pi/OMP, including a Claude `tool_result` whose content contains an image; ACP `update.content[i]` for Grok; `event.result.output[i]` for Kimi; `payload.content[i]` / `payload.output[i]` for Codex; or the flattened OpenCode image attachments. Grok's synthetic Imagine blocks map back to `rawInput.image[i]` or `rawOutput.path`; OMP `blob:sha256:` references resolve through the profile/XDG-aware `blobs/` directory beside its managed `sessions/` tree; Kimi `blobref:<mime>;<sha256>` references resolve through the `blobs/` directory beside its main-agent `wire.jsonl`. For Codex `view_image` function calls the endpoint resolves the call's absolute file `path` on the host and serves the file when it sniffs as an image (capped at 32 MB). Responds with the image `Content-Type` and cache headers; returns 404 when the addressed block is not an image.
 
