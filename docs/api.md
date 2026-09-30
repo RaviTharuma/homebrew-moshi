@@ -128,6 +128,7 @@ Every frame uses the same shape. Fields are optional, interpreted per `type`. Un
   "tmuxSession": "main",                 // present when terminalKind is "tmux"
   "tmuxWindow": "0",
   "tmuxPane": "%7",
+  "tmuxSocket": "/private/tmp/tmux-501/default", // server socket; forwarded in pushes
   "toolName": "Bash",
   "modelName": "claude-opus-4-7",
   "contextPercent": 42,                  // 0..100, 0 = unknown
@@ -400,6 +401,12 @@ git_background_fetch = false
 #   moshi-hook set scan-ports 3000,8000-8010
 #   moshi-hook set scan-ports none
 scan_ports = "all"
+# Extra tmux servers to offer in the mux picker, as `tmux -S` socket paths.
+# Servers in tmux's own socket directory (every `tmux -L <name>`) are found
+# without this; only sockets kept elsewhere need listing.
+#   moshi-hook set tmux-sockets ~/.tmux/agents.sock
+#   moshi-hook set tmux-sockets none
+tmux_sockets = []
 ```
 
 4. Default `127.0.0.1:24543`
@@ -415,6 +422,7 @@ See `docs/design/client-mode.md` for the full design. Bare `moshi` serves the em
 - The built app-moshi assets (populate with `scripts/build-webapp.sh`) are served by the foreground web listener on `127.0.0.1:24544`; extensionless paths fall back to the SPA shell. `/gateway/*`, `/events`, `/hosts/*`, `/v1/*`, and `/apps/*` proxy to the daemon at `127.0.0.1:24543`, preserving same-origin HTTP and WebSocket behavior. Ctrl-C stops the web listener without stopping agent hooks.
 - `/hosts/<name>/<rest>` reverse-proxies `<rest>` (HTTP and WebSocket) to `127.0.0.1:24543` on `<name>` via `ssh -W` with `ControlMaster` reuse. `<name>` is any syntactically safe ssh destination (optional `user@` + hostname — config aliases and MagicDNS names alike; the daemon reads no ssh config of its own, clients remember their own host lists); unsafe names are `404`, ssh failures are `502` with the last ssh stderr line included (e.g. `Permission denied (publickey)`). BatchMode is forced: hosts needing interactive auth (passwords, locked agents like 1Password) fail fast — verify with plain `ssh <name>` first.
 - `GET /v1/pty?mux=herdr&hideSidebar=true` sets `[ui] sidebar_collapsed_mode = "hidden"` in the host’s shared Herdr config and reloads the selected session before attaching; `false` sets `"compact"`. This affects other clients using that config and only changes the collapsed rail: collapse the sidebar in Herdr to hide it. Omit the parameter to leave configuration untouched. Requires Bash, Perl, and a Herdr version supporting `sidebar_collapsed_mode` (no `--hide-sidebar` flag). Respects `HERDR_CONFIG_PATH` and `XDG_CONFIG_HOME`; SSH edits run on the remote host. Windows hosts do not support this option. POST to the same URL applies the setting and reloads config without opening or closing a PTY. The app uses POST when the preference changes, including for parked terminals. Use your Herdr prefix followed by B (or your custom sidebar binding) to collapse or expand.
+- `GET /v1/pty?mux=tmux:<server>[&muxSession=…][&pane=…]` attaches to a non-default tmux server — pass the `GET /v1/muxes` id as `mux`. Locally the server must be one the daemon lists (it attaches with `-S <socket>`; unknown servers are `422`); with `host=` the remote tmux resolves it (`-L <name>` or `-S <path>`).
 - `GET /v1/pty?mux=…&host=<name>` runs the multiplexer attach through `ssh -t <name>` on a locally-owned PTY; terminal bytes never transit the remote gateway.
 - `POST /v1/hosts/forward` `{"host": "<name>", "ports": [3000, …]}` opens same-port ssh local forwards (`127.0.0.1:<p>` → remote `127.0.0.1:<p>`, max 16 per request) on the host's ControlMaster, so the client can load a remote dev server or simulator preview at `http://localhost:<p>` per the same-port doctrine (no path-prefix reverse proxy — see Transport under `/events`). Idempotent per live master; forwards die with it (ControlPersist reaps an idle master after 10 minutes) and the next request re-establishes them. Unsafe host names are `400`, ssh failures `502` with the last stderr line. A local port collision is detected before the mux request and surfaces as a plain-language `502` (a leftover forward held by the live master is cancelled and re-added instead); the URL is never rewritten to a different port.
 - `GET /v1/hosts/forwards` lists the live tunnels on this machine as `{"forwards": [{"host", "port", "pid"?}]}` — daemon bookkeeping (pruned when the local port has come free) merged with every discovered ssh-owned listener (hand-rolled `ssh -L`, or daemon forwards a restart forgot; `host` is parsed best-effort from the ssh command line, `pid` is the listener's). `POST /v1/hosts/unforward` `{"host", "port", "pid"?}` tears one down: a bridgeable host gets a mux cancel; otherwise the pid — verified to still be an ssh listener on that port — is terminated. Idempotent, judged by the local port coming free rather than ssh's unreliable `-O cancel` exit code. Both act on the LOCAL daemon only; tunnels are invisible to the remote gateway. Discovery never lists ssh-owned listeners as dev servers — a tunnel answers probes with the remote end's content and belongs in the tunnels list.
@@ -1058,7 +1066,10 @@ separate terminal events. Free-form text is rejected — it belongs to
 Enumerates the loopback muxes a session-less client can pin: every herdr
 session the CLI knows (running or not — a stopped session is still
 selectable, the PTY attach `herdr --session <name>` starts it) plus tmux
-when installed. `active` marks the option the default loopback resolution
+when installed: the default server as `tmux`, and each other tmux server that
+has sessions as `tmux:<server>`. `<server>` is the socket name for servers in
+tmux's socket directory (what `tmux -L <name>` creates) or the socket path for
+a `tmux_sockets` entry kept elsewhere; a server with no sessions is omitted. `active` marks the option the default loopback resolution
 currently picks; `id` is exactly what clients pass back as the `mux`
 selection. Through the `/hosts/<name>/` bridge the list describes that
 remote machine.
@@ -1068,7 +1079,8 @@ remote machine.
   "muxes": [
     { "id": "herdr:default", "kind": "herdr", "session": "default", "running": true, "active": true },
     { "id": "herdr:ztest", "kind": "herdr", "session": "ztest", "running": false },
-    { "id": "tmux", "kind": "tmux", "running": true }   // running: the server has sessions
+    { "id": "tmux", "kind": "tmux", "running": true },  // running: the server has sessions
+    { "id": "tmux:agents", "kind": "tmux", "server": "agents", "running": true }
   ]
 }
 ```
@@ -1085,12 +1097,13 @@ With session-lookup params (`ssh-connection`, `mosh-port`[+`mosh-host`], or
 and `focused` marks the caller's current branch. Without them — a loopback
 desktop client has no terminal session — the mux resolves to herdr when its
 server responds, or the default tmux server otherwise, and no group is marked
-focused; `mux=herdr:<session>` / `mux=tmux` pins another local mux instead
+focused; `mux=herdr:<session>` / `mux=tmux` / `mux=tmux:<server>` pins
+another local mux instead
 (see `GET /v1/muxes`). The same optional `mux` param rides every loopback
 `/v1/workspaces/*` call and, as a `mux` field, the `/events` watch frame.
 `422` when the
 terminal's mux is unsupported (zellij) or, for loopback, when no local mux
-exists (or the pinned herdr session is not running); `400` on a malformed
+exists (or the pinned herdr session or tmux server is not running); `400` on a malformed
 `mux` value.
 
 ```jsonc
