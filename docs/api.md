@@ -1036,7 +1036,11 @@ an agent by pane or tab, checked against the live mux agent list.
 Multi-line text is wrapped in bracketed-paste markers so harnesses that enable
 bracketed paste keep the newlines in the composer instead of submitting on
 each one; the submitting Enter is sent as its own terminal event after a short
-render window. Failure codes: `400` missing `source`/`sessionId`/`text` or bad
+render window. Codex text is always bracketed, typed or not: its paste-burst
+heuristic otherwise turns an Enter that follows fast input into a newline. For
+Claude and Codex the daemon looks at the pane once after the Enter, and if the
+prompt's last line is still in the composer with no working indicator, sends
+one more Enter (never for `/` or `!` commands or very short text). Failure codes: `400` missing `source`/`sessionId`/`text` or bad
 lookup params; `404` no live terminal (with lookup) or no recorded state for
 the session (without); `409` the live terminal changed agent or session; `422`
 the terminal kind cannot take injected text; `500` the pane vanished or the
