@@ -19,7 +19,7 @@ without one of these categories are acknowledged locally and are not published.
 | `approval_required` | Agent asks the user for a decision or answer | Upsert a pending approval row |
 | `task_complete` | Agent turn finishes or is interrupted | Upsert a completed row |
 | `session_started` | A user prompt starts or resumes work | Upsert a running row |
-| `session_ended` | Session is cleared or reset | Clear active running state |
+| `session_ended` | Session is cleared, reset, or exits | Not published; the daemon updates local session state only |
 | `tool_running` | Agent starts tool activity | Upsert a running row |
 | `tool_finished` | Agent finishes tool activity | Upsert a running row |
 
@@ -63,7 +63,7 @@ not surfaced unless they map cleanly to the category model above.
 | Tool activity | Publishes throttled tool progress |
 | Permission request | Publishes `approval_required` |
 | Agent stops | Publishes `task_complete` |
-| Session clears | Publishes `session_ended` before the next visible turn |
+| Session clears | Ignored; the next prompt starts a fresh row |
 | User interrupt | Publishes `task_complete` when detected |
 
 Codex approvals use the same native-terminal model: Moshi may offer remote
@@ -99,7 +99,7 @@ Grok Build follows the same broad behavior as Claude-compatible hooks:
 | User submits a prompt | Publishes or updates `session_started` |
 | Permission request | Publishes only after the daemon verifies Grok parked on a human; Moshi can then approve once or reject through the native UI |
 | Agent stops | Publishes `task_complete` |
-| Session ends | Publishes `session_ended` to clear active running state |
+| Session ends | Ignored; the turn result or next prompt carries the visible state |
 | Agent asks the user a question | Publishes `approval_required`; Chat View can submit supported choices through the verified TUI bridge |
 | Tool activity | Broad `PreToolUse` detects permission panels; auto-approved tools are discarded before publication, while `PostToolUse` stays targeted to `ask_user_question` |
 
@@ -135,7 +135,7 @@ Chat View can follow the active profile and XDG/custom agent directory:
 | User submits a prompt | Publishes or updates `session_started` |
 | Main session settles | Publishes `task_complete` |
 | Permission request | Publishes `approval_required`; a terminal answer follows with `OMP resumed` |
-| Session shuts down | Publishes `session_ended` |
+| Session shuts down | Ignored; the turn result carries the visible state |
 | Tool activity | Not installed by default |
 
 ### Pi
@@ -152,7 +152,7 @@ directory:
 | User submits a prompt | Publishes or updates `session_started` |
 | Agent fully settles | Publishes `task_complete` after retries, compaction, and queued follow-ups finish |
 | Permission request | Publishes `approval_required`; a terminal answer follows with `Pi resumed` |
-| Session shuts down | Publishes `session_ended` |
+| Session shuts down | Ignored; the turn result carries the visible state |
 | Tool activity | Not installed by default; Pi tool hooks are synchronous and should stay opt-in |
 
 ### OmO
@@ -169,7 +169,7 @@ prompts arrive on its event bus and are mirrored as answer-in-terminal rows.
 | User submits a prompt | Publishes or updates `session_started` |
 | Agent fully settles | Publishes `task_complete` |
 | Permission prompt | Publishes `approval_required` with "Answer in terminal"; the answer follows with `OmO resumed` |
-| Session shuts down (`/new`, `/resume`, exit) | Publishes `session_ended` |
+| Session shuts down (`/new`, `/resume`, exit) | Ignored; the turn result carries the visible state |
 | Conversation | Chat View from its session file |
 
 ### jcode
@@ -188,7 +188,7 @@ inbox.
 | A turn starts | Publishes or updates `session_started` with the prompt |
 | A turn ends (including Esc) | Publishes `task_complete` with the final reply, or the error |
 | Esc during a tool call (jcode aborts the turn without its hook) | Publishes `task_complete` titled `jcode interrupted` from jcode's own log |
-| `/clear` or client exit | Publishes `session_ended` |
+| `/clear` or client exit | Ignored; the turn result carries the visible state |
 | Conversation | Chat View from its saved session |
 
 ### Goose
@@ -208,7 +208,7 @@ so approvals are not surfaced.
 | Turn finishes | Publishes `task_complete` with the final reply |
 | Ctrl-C during a turn | Publishes `task_complete` titled `goose interrupted` |
 | `/new` | Ends the old session and follows the new one right away |
-| Session exits | Publishes `session_ended` |
+| Session exits | Ignored; the turn result carries the visible state |
 | Conversation | Chat View from Goose's session store |
 
 ### Hermes Agent
@@ -224,7 +224,7 @@ blocks Hermes itself.
 | Agent completes or is interrupted | Publishes `task_complete` |
 | Approval request in the interactive CLI/TUI | Publishes `approval_required` |
 | Approval resolves | Clears the pending action without publishing another completion |
-| Session finalizes | Publishes `session_ended` |
+| Session finalizes | Ignored; the turn result carries the visible state |
 
 Hermes keeps ownership of its approval prompt. Moshi may answer that prompt
 remotely only when its terminal bridge can verify the visible command and

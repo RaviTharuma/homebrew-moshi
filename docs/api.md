@@ -230,7 +230,7 @@ Publish an agent event.
   "pendingActionId": "act_…",            // present when a decision is required
   "expiresAt": "2026-04-26T12:01:00Z",
   "contextPercent": 42,
-  "accountId": "claude:plan_max"         // <source>:<id>; omit if signed out
+  "accountId": "claude:plan_max"         // <source>:<id>; omit if signed out or usage collection is off
 }
 ```
 
@@ -365,7 +365,10 @@ always_on_discovery = true
 # opt out, or set a duration (minimum 1m) through the same CLI setting:
 #   moshi-hook set usage-collection off
 #   moshi-hook set usage-collection 5m
-# Manual `moshi-hook usage` still works when this is off.
+# Off also stops the daemon from looking up which agent account fired each
+# event (for Claude: a Keychain read plus Anthropic's /api/oauth/profile), so
+# events carry no accountId. Manual `moshi-hook usage` still works when this
+# is off.
 usage_collection = true
 usage_poll_interval = "5m"
 # Fresh installs leave the two keys above unset until `moshi-hook set
