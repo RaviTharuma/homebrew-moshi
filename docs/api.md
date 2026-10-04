@@ -407,6 +407,14 @@ scan_ports = "all"
 #   moshi-hook set tmux-sockets ~/.tmux/agents.sock
 #   moshi-hook set tmux-sockets none
 tmux_sockets = []
+# Names or shell globs (matched against one entry name, not a path) the diff
+# app's Files browser never lists. Omit it (or use "default") for .git,
+# node_modules and common dependency/cache folders; an empty array lists
+# everything except .git. Other gitignored entries are always listed, flagged
+# `ignored: true` so clients can mute them.
+#   moshi-hook set files-exclude node_modules,.git,*.pyc
+#   moshi-hook set files-exclude default
+files_exclude = "default"
 ```
 
 4. Default `127.0.0.1:24543`
@@ -786,17 +794,29 @@ results plus the refreshed status list so clients update in one round trip.
 
 ### `POST /v1/diff/start`
 
-Starts or reuses an embedded diff viewer session for a Git repository.
+Starts or reuses an embedded diff viewer session for a directory. A Git
+`cwd` normalizes to its repository root; any other directory is its own root,
+reported with `"git": false`: file browsing (`api/source/*`) works there, the
+diff and history surfaces don't.
 
 ```jsonc
 // request
 { "cwd": "/Users/me/projects/foo" }
 
 // response
-{ "diffSessionId": "diff_abc123", "url": "/apps/diff/diff_abc123/" }
+{ "diffSessionId": "diff_abc123", "url": "/apps/diff/diff_abc123/", "git": true }
 ```
 
 Diff sessions expire after 15 minutes idle and are served under `/apps/diff/:sessionId/`. Diff payloads are read from the host filesystem and never sent to the Moshi backend.
+
+`/apps/diff/:sessionId/api/events` is a WebSocket of JSON `{"type": …}`
+messages: `ready` once the watches are installed, `repository` when
+git-visible state moved (`.git` changes, or a once-a-second status poll for
+working-tree edits), and `tree` when entries were only created, removed or
+renamed in a folder a client listed through `api/source/tree` — gitignored
+files and non-Git directories included. Clients refetch everything on
+`repository` and only file listings on `tree`. Listed folders are polled by
+directory mtime (no file descriptors are held), at most 256 per root.
 
 ### `POST /v1/questions/answer`
 
