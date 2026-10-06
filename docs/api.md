@@ -67,11 +67,11 @@ Approval round-trip across all four components. Numbers reference the steps belo
   +-----+------+
         | (2) approval.request, newline JSON over Unix socket
         v
-  +------------+   (3) approval.request           +-------------+
+  +------------+   (3) pending-action.open        +-------------+
   | moshi-hook | ----------- WSS ---------------> |  Moshi      |
   | serve      |   bearer hostSecret              |  server     | ---+
   | (daemon)   |                                  |             |    | (4) push
-  |            |   (6) approval.decision          |             |    |
+  |            |   (6) action.approve / .deny     |             |    |
   |            | <----------- WSS --------------- |             | <--+
   +-----+------+                                  +------+------+    |
         | (7) approval.response                          ^           v
@@ -110,7 +110,9 @@ Every frame uses the same shape. Fields are optional, interpreted per `type`. Un
 ```jsonc
 {
   "type": "approval.request",
-  "source": "opencode",                  // blocking approval adapters
+  "source": "opencode",                  // blocking approval adapters; "ext:<id>" for scripts
+  "sourceLabel": "Release script",       // ext sources only: name shown on the card
+  "silent": false,                       // true: inbox update without a visible push
   "sessionId": "abc-123",
   "actionId": "act_01HXY…",              // correlates request/response
 
@@ -137,11 +139,13 @@ Every frame uses the same shape. Fields are optional, interpreted per `type`. Un
   "message": "claude wants to run …",
   "expiresAt": "2026-04-26T12:01:00Z",
   "requestedAt": "2026-04-26T12:00:00Z",
+  "options": [{"id":"0","label":"Run"}], // multiple-choice approval.request (2–6)
 
   // approval.response
   "accepted": true,
   "decision": "approve",                 // "approve" | "deny"
   "reason": "user accepted on iPhone",
+  "choice": "0",                         // option id, only with options + approve
 
   // error
   "error": "daemon shutting down"
@@ -155,9 +159,11 @@ Every frame uses the same shape. Fields are optional, interpreted per `type`. Un
 | Hook → daemon | `approval.request` | Block until daemon returns a decision. Used by blocking approval adapters. |
 | Hook → daemon | `session.update` | Notify daemon of session state change. Claude/Codex/Hermes terminal approvals use this with `category:"approval_required"` and, when a terminal target is available, `actionId` + `phase:"waitingForApproval"`. |
 | Hook → daemon | `session.closed` | Session ended. |
+| Hook → daemon | `status.request` | Ask whether the daemon is paired and its WebSocket to Moshi is connected. Answered with `status.response` (`paired`, `connected`). Used by `moshi-hook ask` before blocking. |
 | Hook → daemon | `session.bind` | The terminal pane in the envelope now shows `sessionId` (OpenCode 2 TUI plugin; `agentPid` is the TUI process). The daemon moves that pane off every other session without ending them; an empty `sessionId` only releases the pane. Never published as a push. |
 | Daemon → hook | `approval.response` | Decision for prior `approval.request` (matched by `actionId`). |
-| Daemon → hook | `ack` | Ack of a fire-and-forget message. |
+| Daemon → hook | `status.response` | Reply to `status.request`. |
+| Daemon → hook | `ack` | Ack of a fire-and-forget message. For an `ext:` source it carries `publish`, the outcome of the first publish attempt (see [Script sources](#script-sources-ext)). |
 | Daemon → hook | `error` | Protocol/transport error. |
 
 ### Example
@@ -171,6 +177,69 @@ Every frame uses the same shape. Fields are optional, interpreted per `type`. Un
 
 // ← daemon
 {"type":"ack","sessionId":"s1"}
+```
+
+### Script sources (`ext:`)
+
+`moshi-hook notify`, `ask` and `job` publish for scripts and internal tools
+rather than agents. Their `source` is `ext:<id>` (`<id>` matches
+`^[a-z0-9][a-z0-9._-]{0,31}$`) and they always send `sourceLabel` (1–40
+characters), the name clients show instead of an agent brand. They carry no
+transcript and never bind a terminal pane; the terminal location, when the
+command ran inside one, is only there so tapping the push opens it.
+
+| Command | `type` | `category` | Notes |
+|---|---|---|---|
+| `notify` | `session.update` | `info` (`error` with `--error`) | `silent` with `--silent` |
+| `ask` | `approval.request` | `approval_required` | `actionId` + `expiresAt` from `--timeout`; `options` with `--options` |
+| `job start` / `update` | `session.update` | `session_started` / `tool_running` | always `silent`; updates are coalesced to one per 15 s |
+| `job end` | `session.update` | `task_complete` (`error` with `--error`) | |
+
+The daemon treats ext sources differently from agents in four ways:
+
+- The `ack` waits up to 5 s for the first publish attempt and reports it in
+  `publish`: `published`, `retrying`, `pending` (no answer yet), or a drop:
+  `not_paired`, `rate_limited`, `no_push_token`, `suppressed`, `rejected`.
+- An ext `approval.request` waits for its own `expiresAt` (capped at 24 h)
+  instead of the daemon's default approval timeout. When its push is dropped
+  it resolves at once with `decision: "undeliverable"` and the drop reason
+  in `reason`, and publishes no resolution row.
+- Ext approvals stay audible when `suppress-push-while-unlocked` is on: the
+  user ran `ask` to be asked on their phone.
+- Ext `tool_running` events (job progress) are published; agents' are not.
+
+```jsonc
+// → daemon
+{"type":"approval.request","source":"ext:deploy","sourceLabel":"Prod deploy",
+ "sessionId":"ext-4f…","actionId":"9c1…","category":"approval_required",
+ "title":"Deploy api to prod?","message":"Deploy api to prod?",
+ "expiresAt":"2026-10-05T12:10:00Z"}
+
+// ← daemon
+{"type":"approval.response","actionId":"9c1…","accepted":true,"decision":"approve","reason":"remote"}
+```
+
+#### Multiple choice
+
+`ask --options` adds `options` to the request: 2–6 `{id, label}` pairs, ids
+`"0"`…`"5"` in order, labels 1–40 characters. The phone answers `approve`
+with a `choice` (one of the ids) or `deny` to cancel, and the response
+carries that `choice`. The request `message` also lists the options as text
+(`Options: Run · Dry run · Skip`) for apps that predate multiple choice.
+
+An approve without a valid `choice` — an older app's plain Approve, a local
+Chat View approve, an unknown id — resolves as `deny`. It never picks an
+option. The resolution row is titled `Answered: <label>` for a choice.
+
+```jsonc
+// → daemon
+{"type":"approval.request","source":"ext:migrate","sourceLabel":"Migrations",
+ "actionId":"7d2…","category":"approval_required","title":"Migrate DB?",
+ "message":"Migrate DB?\n\nOptions: Run · Dry run · Skip",
+ "options":[{"id":"0","label":"Run"},{"id":"1","label":"Dry run"},{"id":"2","label":"Skip"}]}
+
+// ← daemon
+{"type":"approval.response","actionId":"7d2…","accepted":true,"decision":"approve","reason":"remote","choice":"1"}
 ```
 
 ---
@@ -216,7 +285,9 @@ Publish an agent event.
 ```jsonc
 {
   "eventId": "evt_01HXY…",
-  "source": "claude",
+  "source": "claude",                    // or "ext:<id>" for scripts
+  "sourceLabel": "Release script",       // ext sources only (1–40 chars)
+  "silent": false,                       // true: update the inbox without a visible push
   "eventType": "pre_tool",
   "sessionId": "s1",
   "category": "shell",
@@ -324,7 +395,8 @@ Both directions share one shape:
   "title": "Run shell command",
   "message": "rm -rf node_modules",
   "expiresAt": "2026-04-26T12:01:00Z",
-  "requestedAt": "2026-04-26T12:00:00Z"
+  "requestedAt": "2026-04-26T12:00:00Z",
+  "options": [{"id":"0","label":"Run"},{"id":"1","label":"Skip"}] // ext approval_required only
 }
 ```
 
@@ -333,10 +405,12 @@ Both directions share one shape:
 | Direction | `type` | Purpose |
 |---|---|---|
 | Daemon → server | `hello` | Sent immediately after connect. |
-| Daemon → server | `approval.request` / `pending-action.open` | Forwarded from a blocking hook or opened by the TUI bridge. |
-| Server → daemon | `approval.decision` | `actionId` + `decision` + optional `reason`. |
-| Server → daemon | `ping` | Keepalive. |
-| Daemon → server | `pong` | Reply to `ping`. |
+| Daemon → server | `pending-action.open` | A blocking approval is waiting (forwarded hook request, TUI bridge prompt or script `ask`). `actionId`, title/message, `expiresAt`; `options` for a multiple-choice ask. |
+| Daemon → server | `pending-action.closed` | The approval resolved or expired on the host; the server drops it. |
+| Server → daemon | `action.approve` / `action.deny` | The user's decision: `actionId` + `decision` + `requestedAt`; `choice` (option id) on a multiple-choice approve. |
+| Daemon → server | `ack` | The decision reached its pending approval. |
+| Daemon → server | `ping` | Keepalive, byte-exact `{"type":"ping"}`. |
+| Server → daemon | `pong` | Answered at the Cloudflare edge (`setWebSocketAutoResponse`) without waking the Durable Object. |
 
 Unknown types are logged and ignored — receivers must be lenient so the server can ship new frames ahead of daemon upgrades.
 
@@ -592,8 +666,9 @@ which also wakes the agent watch:
 account rate-limit windows — the same local reads as `moshi-hook usage`, taken
 from each agent's own credential/cache files, never from the Moshi server, so
 it works unpaired. The current list arrives right after the ack (once the
-daemon has collected; nothing while usage collection is off), then again
-whenever it changes. The list replaces the previous one:
+daemon has collected), then again whenever it changes. While usage collection
+is off the ack says `"usage": false` and no list ever arrives, so clients can
+hide their usage UI. The list replaces the previous one:
 
 ```jsonc
 { "usage": [ {
@@ -797,7 +872,7 @@ results plus the refreshed status list so clients update in one round trip.
 
 ### `POST /v1/diff/start`
 
-Starts or reuses an embedded diff viewer session for a directory. A Git
+Starts or reuses a diff viewer session for a directory. A Git
 `cwd` normalizes to its repository root; any other directory is its own root,
 reported with `"git": false`: file browsing (`api/source/*`) works there, the
 diff and history surfaces don't.

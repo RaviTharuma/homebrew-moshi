@@ -78,14 +78,14 @@ Do not assume a normal package upgrade has removed the downstream patch. Until y
 
 ## Git diff viewer
 
-The `moshi` alias can also open a local browser-based diff viewer for a Git project:
+The diff viewer lives in the Moshi app. `moshi diff` starts the local server it reads a Git project's changes from:
 
 ```bash
 moshi diff .
 moshi diff ~/a/b/name --no-open
 ```
 
-The viewer is embedded in `moshi-hook`, starts a localhost-only HTTP server, and reads Git state directly from the selected directory. Diff contents stay on the host. The default port is stable (`24543`); running `moshi diff` again for another workspace updates the existing diff server and reopens the same local URL. If the daemon gateway already owns that port, `moshi diff` falls back to a free ephemeral port. Pass `--port 0` to force an ephemeral free port.
+The server is localhost-only, serves only the data the app's viewer needs, and reads Git state directly from the selected directory; there is no viewer to open in a desktop browser (the URL shows a page asking you to update Moshi, and `--no-open` skips opening it). Diff contents stay on the host. The default port is stable (`24543`); running `moshi diff` again for another workspace updates the existing diff server and reopens the same local URL. If the daemon gateway already owns that port, `moshi diff` falls back to a free ephemeral port. Pass `--port 0` to force an ephemeral free port.
 
 ## Host Easy Pair
 
@@ -104,7 +104,7 @@ Useful host commands:
 | Command | What it does |
 |---|---|
 | `moshi [--no-open] [--listen <addr>]` (no path) | Run the embedded web client on `127.0.0.1:24544` (or `--listen`, e.g. `0.0.0.0:24544` for all interfaces) until Ctrl-C and open it in the default browser unless `--no-open` is set. Reuses a persistent daemon or starts a temporary one automatically, proxies API/WebSocket traffic to it, and prints request logs. |
-| `host setup [--name <n>] [--host <h>] [--port <p>] [--user <u>] [--force]` | Start an Easy Pair setup session, print the QR, and pair this daemon after claim. |
+| `host setup [--name <n>] [--host <h>] [--port <p>] [--user <u>] [--force] [--json]` | Start an Easy Pair setup session, print the QR, and pair this daemon after claim. |
 | `host list` | List local Moshi SSH/Mosh pairings installed on this host. |
 | `host revoke <id>` | Remove a Moshi host public key from `authorized_keys`. |
 | `host enable-ssh` | On macOS, open/enable Remote Login prerequisites where supported. |
@@ -112,6 +112,8 @@ Useful host commands:
 `moshi-hook pair --token` is still available for manual daemon re-pairing. Easy Pair does not store the phone's user token on the host; it stores the host-scoped `hostSecret` used by inbox, Live Activity, Apple Watch events, usage sync, and approvals.
 
 By default, `host setup` shows an address selector before generating the QR. Use up/down, `1..n`, or Enter to choose a detected address, or choose the final option to type a public IP/hostname for VPS and cloud hosts. Pass `--host <hostname-or-ip>` to skip the selector in scripts. Non-interactive and `--json` runs keep the old automatic first match: Tailscale MagicDNS/IPv4, then LAN IPv4 on Linux, then Bonjour/hostname fallback.
+
+For scripts, `host setup --json` prints JSON lines instead of the QR. The first line has `"status":"pending"` and the `deepLink` to open on the phone. The command then keeps running until the app claims the link, installs the key, and prints a final line: `{"status":"ready","hostId":…,"displayName":…,"daemonPaired":true}` (with a `warning` field if the daemon pairing could not be saved), or `{"status":"error","error":…}` with a non-zero exit when the session expires (5 minutes) or the claim fails. Keep the process running until that final line; if it exits early the app still shows the host as paired but its key never reaches `authorized_keys`. Restart a running `serve` after the first pairing so it picks up the new host identity.
 
 On macOS, `pair` stores secrets in Keychain by default. If you are pairing from SSH or another session where Keychain is locked or unavailable, either unlock the login keychain first:
 
@@ -191,7 +193,7 @@ never uses, refreshes, or rewrites the refresh token.
 | `host list` | List local Moshi host SSH pairings. |
 | `host revoke <id>` | Remove a Moshi host SSH key from `authorized_keys`. |
 | `host enable-ssh` | Help enable SSH prerequisites on macOS. |
-| `diff [path] [--no-open] [--port N]` | Serve the embedded Git diff viewer for a local project directory. |
+| `diff [path] [--no-open] [--port N]` | Serve the Git diff API for a local project directory (the viewer UI lives in the Moshi app). |
 | `install` | Write Moshi entries into supported agent config files. By default, only installs targets whose config root already exists and reports missing agents as skipped. Use `--target claude,codex,opencode,gemini,antigravity,cursor,kimi,qwen,qoder,droid,copilot,amp,devin,grok,omp,pi,omo,jcode,goose,hermes` to force or limit the set. Non-destructive: leaves user-owned hooks alone. OpenCode installs globally by default; use `--local` for `.opencode/plugins` in the current project. When Codex 0.157+ is installed with its shared background server on, `install` asks whether to turn it off (non-interactive runs print a pointer to `doctor`). |
 | `uninstall` | Remove Moshi-owned entries from those files. For OpenCode, pass `--local` to remove a project-local install. |
 | `service install` | macOS: write and load the `app.getmoshi.moshi-hook` LaunchAgent (`~/Library/LaunchAgents/`), which starts `serve` at login and keeps it running; stdout/stderr go to `<state>/service.log`. Re-running it reloads the agent on the current binary. Homebrew installs use `brew services start moshi-hook` instead, and `service install` refuses while the Homebrew service is installed so only one daemon runs. Linux: install and start a systemd user service. Windows groundwork: register current-user logon startup under `HKCU\...\Run` and start a detached daemon without elevation. |
@@ -208,6 +210,9 @@ never uses, refreshes, or rewrites the refresh token.
 | `servers [--ssh-connection \"<value>\"] [--mosh-port <p> [--mosh-host <ip>]] [--et-client-id <id>\|--et]` | Probe local TCP listeners and print HTTP web servers for SSH preflight (filtered to `text/html` responses, tagged with owning process + PID, one-entry-per-PID). With a session lookup, decorates each row with `isCurrentContext`. |
 | `servers kill --pid <pid> --port <port> [--host <host>] [--force=false]` | Terminate a discovered local HTTP server after re-validating that the PID and port still match the server list. |
 | `context [--ssh-connection \"<value>\"] [--mosh-port <p> [--mosh-host <ip>]] [--et-client-id <id>\|--et]` | Print terminal context (kind=tmux or shell, cwd, git) for the caller or a remote SSH/Mosh/ET session. With no flags, auto-detects from `$TMUX_PANE` or falls back to the caller's cwd. With a remote-session identifier, looks up the iOS-owned session's login shell and reports whether the user is currently in tmux. Used by Moshi clients over SSH preflight. |
+| `notify [message...]` | Send a notification to the Moshi inbox and your phone from a script. See [Scripts and internal tools](#scripts-and-internal-tools). |
+| `ask question...` | Ask a yes/no question on your phone and exit with the answer (0 approve, 1 deny, 3 timeout, 4 unreachable). See [Scripts and internal tools](#scripts-and-internal-tools). |
+| `job start\|update\|end` | Show a long-running job as a live row in the Moshi inbox. See [Scripts and internal tools](#scripts-and-internal-tools). |
 | `logs [-f]` | Tail the daemon log. |
 | `version` | Version, commit SHA, build date. |
 
@@ -267,6 +272,81 @@ moshi-hook context --mosh-port 60001 --mosh-host 192.168.68.54
 # iOS query for a remote Eternal Terminal session
 moshi-hook context --et-client-id abcdefghijklmnop
 ```
+
+## Scripts and internal tools
+
+`notify`, `ask` and `job` let scripts, CI jobs and internal tools use the
+Moshi inbox and phone approvals. They need the daemon running and the host
+paired, like agent hooks. Each takes `--source <id>` (default `script`;
+lowercase letters, digits, `.`, `_`, `-`) and `--label <name>` (default:
+from the id), which is the name shown on the card. Neither may be a built-in
+agent's name ("Claude", "Claude Code", "Codex", …, compared ignoring case
+and punctuation), so a script's card can't pass for an agent's; "Claude
+review script" is fine.
+
+### `notify`
+
+```sh
+make build && moshi-hook notify "Build passed" || moshi-hook notify --error "Build failed"
+moshi-hook notify --source backup --title "Backup done" --silent "42 GB in 3m12s"
+long-job 2>&1 | tail -1 | moshi-hook notify --title "long-job finished"   # message from stdin
+```
+
+The title defaults to the message's first line. `--silent` updates the inbox
+without a visible push. `notify` is best effort: when the notification can't
+be delivered (daemon not running, not paired, push rate limit reached) it
+prints the reason to stderr and still exits 0, so it never breaks the script
+calling it. `--strict` exits 1 instead.
+
+### `ask`
+
+```sh
+moshi-hook ask "Deploy api to prod?" && ./deploy.sh
+moshi-hook ask --source deploy --label "Prod deploy" --timeout 30m --require-remote "Run the migration?"
+choice=$(moshi-hook ask --options "Run,Dry run,Skip" "Migrate DB?") || exit 1
+moshi-hook ask --option "Ship it" --option "Wait, I'll check" "Release v2?"   # a choice may contain commas
+```
+
+Blocks until you answer on your phone (default timeout 10 minutes, at most
+24 hours).
+
+With `--options` (comma-separated) or repeated `--option`, `ask` is a
+multiple-choice question with 2–6 answers of up to 40 characters. The phone
+shows one button per option plus Cancel, and the chosen option is printed to
+stdout. A Moshi app too old to show options can only cancel the question.
+
+| Exit | Meaning |
+|---|---|
+| 0 | Approved (or an option chosen; it is printed to stdout) |
+| 1 | Denied (or cancelled) |
+| 2 | Usage error |
+| 3 | No answer before `--timeout` |
+| 4 | Moshi unreachable: daemon not running, not paired, offline, or the push was dropped (for example by the rate limit) |
+
+When Moshi can't be reached and stdin is a terminal, `ask` asks in the
+terminal instead (`[y/N]`, or a numbered menu with `--options`), with the
+same `--timeout`: no answer in time exits 3.
+`--require-remote` turns that fallback off, so
+only an answer from the phone can approve. Use it for gates you don't want a
+stray Enter key to pass. Approvals from `ask` still push when
+`suppress-push-while-unlocked` is on.
+
+### `job`
+
+```sh
+id=$(moshi-hook job start --source train "Training run #12")
+moshi-hook job update "$id" --progress 45 --message "epoch 9/20"
+moshi-hook job end "$id"                # or: moshi-hook job end "$id" --error --message "OOM"
+```
+
+`start` prints the job id and adds a silent live row; `update` moves it
+(updates closer than 15 seconds apart are coalesced, keeping the latest);
+`end` notifies with the outcome and duration. Job state lives under the state
+directory, so `update` and `end` must run on the same machine as `start`.
+All three are best effort and exit 0 when Moshi can't be reached.
+
+Events from these commands share the host's push rate limit with agents
+(10 a minute on the free plan), so don't call `notify` in a tight loop.
 
 ## Installed agent files
 
