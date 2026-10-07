@@ -8,6 +8,8 @@ Wire protocols `moshi-hook` participates in. Five surfaces:
 4. **Host gateway HTTP** — Moshi app ↔ `moshi-hook serve` over an SSH local forward. Diff viewer JSON/static HTTP on localhost, no bearer auth.
 5. **CLI JSON** — clients ↔ CLI subcommands over SSH preflight. Stdout JSON for server discovery, terminal context, and cwd-list.
 
+Go clients get the gateway's wire types from the exported package `github.com/rjyo/moshi/app-hook/gatewayapi` (standard library only): the `/events` frames, workspaces and their mutations, transcripts, pty, prompt/keys/paste/answer bodies, files and upload, the diff app API, servers and host forwards, integrations, settings, update status, the doctor report, and composer/session-options data. `internal/gateway` (and `diffapp`, `tui`, `install`, `cli`) alias those types, so they are exactly what the daemon encodes. Add new wire structs there. A few payloads stay untyped on purpose: `/v1/update/manifest` is the CDN release feed served verbatim, the `{ok, settings}` / `{ok, update}` envelopes wrap controller values the gateway sees as `any`, and `pendingPrompt` / `agent.prompt` are passed through as raw JSON (decode them into `gatewayapi.PendingPrompt`).
+
 ## Transport doctrine
 
 Use HTTP for bounded request/response operations. Use WebSockets for state or
