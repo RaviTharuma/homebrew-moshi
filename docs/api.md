@@ -902,6 +902,16 @@ files and non-Git directories included. Clients refetch everything on
 `repository` and only file listings on `tree`. Listed folders are polled by
 directory mtime (no file descriptors are held), at most 256 per root.
 
+`/apps/diff/:sessionId/api/source/files` lists every file under the root in
+one response, for a client's quick open to fuzzy-match locally:
+`{"files": ["src/main.go", …], "root": "/abs/root", "truncated": false}`,
+relative and slash-separated. In a Git work tree it is `git ls-files --cached
+--others --exclude-standard` (tracked files plus untracked ones `.gitignore`
+keeps); a non-Git directory is walked, skipping `node_modules`, `vendor`,
+`dist`, `build`, `target`, `.next`, `.cache` and VCS directories. The Files
+exclude patterns apply to every path segment. The list stops at 200,000 files
+(a walk at 400,000 entries) with `"truncated": true`.
+
 ### `POST /v1/questions/answer`
 
 Submits a complete Chat View answer form to the live Claude Code, Codex, Cursor,
