@@ -949,7 +949,17 @@ answer.
 ```
 
 Option indexes are zero-based. Every question must have at least one selection;
-single-select questions require exactly one. Codex does not support
+single-select questions require exactly one.
+
+Claude Code and OMP answers may carry free text instead (capability
+`questions.text`): `{ "optionIndexes": [], "text": "Something else" }`. The
+bridge types it into the form's own text row, Claude's "Type something" or
+OMP's "Other (type your own)", flattened to one line and at most 4096 bytes.
+A single-select answer is either an option or text; a multi-select answer may
+add text to its options. Text is refused with `400` when the visible question
+draws no such row; for Claude also for a preview question and for a
+multi-question form the hook did not capture (later tabs cannot be checked).
+Other harnesses take options only. Codex does not support
 multi-select questions. Herdr uses the same harness-specific answer sequence;
 the bridge translates it through `herdr pane send-keys` after resolving and
 verifying the focused pane.
@@ -961,7 +971,12 @@ same verified TUI bridge. It supports Claude Code, Codex, Kimi, Pi, OMP, and
 OpenCode. The app sends the complete
 visible menu and the plan markdown, not a raw key. The daemon verifies the
 agent session, menu title, every numbered option label, and a visible
-fingerprint from the plan before it selects anything. As with question
+fingerprint from the plan before it selects anything. OMP's plan review menu
+is unnumbered and skips rows it has disabled, so for OMP the bridge moves the
+cursor one row at a time, re-reading where it landed, and refuses an option it
+cannot reach; the OMP extension records the plan card when the review opens
+(its `write` to `xd://propose`) and retires it on the next turn, session
+switch or exit. As with question
 answers, the session-lookup params are optional for loopback callers, which
 resolve the pane and captured prompt from the recorded agent state instead.
 
