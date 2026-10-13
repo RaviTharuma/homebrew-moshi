@@ -124,7 +124,7 @@ Every frame uses the same shape. Fields are optional, interpreted per `type`. Un
   "category": "shell",
   "cwd": "/Users/jyo/projects/foo",
   "projectName": "foo",
-  "terminalKind": "zellij",              // "tmux" | "zellij" | "herdr"
+  "terminalKind": "zellij",              // "tmux" | "zellij" | "herdr" | a mux driver kind
   "zellijSession": "main",
   "zellijPane": "terminal_1",
   "herdrSession": "main",
@@ -133,6 +133,12 @@ Every frame uses the same shape. Fields are optional, interpreted per `type`. Un
   "tmuxWindow": "0",
   "tmuxPane": "%7",
   "tmuxSocket": "/private/tmp/tmux-501/default", // server socket; forwarded in pushes
+  "muxSession": "work",                  // mux drivers (terminalKind "tern", "tuios", …):
+  "muxWindow": "0",                      //   one set of fields for every driver-backed
+  "muxPane": "7e02c7a1-…",               //   multiplexer; which are set depends on it
+  "muxSocket": "/tmp/tuios-501/tuios.sock",
+  "muxEnv": {"TERN_PANE": "5"},          // in-process plugins only: driver env the daemon
+                                         //   detects from on intake; never forwarded
   "toolName": "Bash",
   "modelName": "claude-opus-4-7",
   "contextPercent": 42,                  // 0..100, 0 = unknown
@@ -512,6 +518,7 @@ See `docs/design/client-mode.md` for the full design. Bare `moshi` serves the em
 
 - The built app-moshi assets (populate with `scripts/build-webapp.sh`) are served by the foreground web listener on `127.0.0.1:24544`; extensionless paths fall back to the SPA shell. `/gateway/*`, `/events`, `/hosts/*`, `/v1/*`, and `/apps/*` proxy to the daemon at `127.0.0.1:24543`, preserving same-origin HTTP and WebSocket behavior. Ctrl-C stops the web listener without stopping agent hooks.
 - `/hosts/<name>/<rest>` reverse-proxies `<rest>` (HTTP and WebSocket) to `127.0.0.1:24543` on `<name>` via `ssh -W` with `ControlMaster` reuse. `<name>` is any syntactically safe ssh destination (optional `user@` + hostname — config aliases and MagicDNS names alike; the daemon reads no ssh config of its own, clients remember their own host lists); unsafe names are `404`, ssh failures are `502` with the last ssh stderr line included (e.g. `Permission denied (publickey)`). BatchMode is forced: hosts needing interactive auth (passwords, locked agents like 1Password) fail fast — verify with plain `ssh <name>` first.
+- `GET /v1/pty?mux=<driver kind>[&muxSession=<name>]` attaches a mux driver's client for multiplexers that have one (TUIOS: `tuios attach -c <name>`, or the most recent session without a name); `pane=` is rejected for them, and an unknown or non-attachable kind answers 400 naming the attachable ones. See [mux-drivers.md](internal/mux-drivers.md).
 - `GET /v1/pty?mux=herdr&hideSidebar=true` sets `[ui] sidebar_collapsed_mode = "hidden"` in the host’s shared Herdr config and reloads the selected session before attaching; `false` sets `"compact"`. This affects other clients using that config and only changes the collapsed rail: collapse the sidebar in Herdr to hide it. Omit the parameter to leave configuration untouched. Requires a Herdr version supporting `sidebar_collapsed_mode` (no `--hide-sidebar` flag); works on macOS, Linux and Windows. Respects `HERDR_CONFIG_PATH` and `XDG_CONFIG_HOME` (else `%APPDATA%` on Windows). For SSH hosts the remote moshi-hook applies it via `POST /v1/herdr/sidebar` (older remote daemons: the attach proceeds unchanged and POST reports the hook is too old). A failed config update never blocks the attach. POST to the same URL applies the setting and reloads config without opening or closing a PTY. The app uses POST when the preference changes, including for parked terminals. Use your Herdr prefix followed by B (or your custom sidebar binding) to collapse or expand.
 - `POST /v1/herdr/sidebar?mode=hidden|compact[&muxSession=<name>]` applies that collapsed rail mode to this daemon's own Herdr config and reloads the session (204; 422 with `error` on failure). Remote gateways call it over the SSH bridge before a remote attach.
 - `GET /v1/pty?mux=tmux:<server>[&muxSession=…][&pane=…]` attaches to a non-default tmux server — pass the `GET /v1/muxes` id as `mux`. Locally the server must be one the daemon lists (it attaches with `-S <socket>`; unknown servers are `422`); with `host=` the remote tmux resolves it (`-L <name>` or `-S <path>`).
@@ -658,6 +665,7 @@ which also wakes the agent watch:
     "planMenu": { "title": "Implement this plan?", "options": ["Approve", "Keep planning"] },
     "pendingPrompt": { "kind": "question", "toolUseId": "…", "questions": [ /* … */ ] },
     "pendingPromptAt": 1787219608.6,
+    "promptSuggestion": "run the tests you just wrote",
     "pendingApproval": {
       "actionId": "122fa92b…",
       "title": "Bash command",
@@ -693,6 +701,13 @@ dialogs too. Answer it via `POST /v1/approvals/answer`
 (capability `approvals.answer`); the frame drops the field within a tick of
 the dialog resolving, however it was answered.
 
+`promptSuggestion` (Claude only) is the agent's own guess at the next prompt:
+the dim text its TUI shows in the empty prompt box after a turn, which → or
+Tab takes. It is the exact text the terminal shows, forwarded by the moshi
+Claude plugin, and present only while the agent is idle and the terminal still
+offers it: the next submitted prompt, `/clear`, or typing in the terminal's
+prompt box drops it. Sending it is an ordinary prompt submission.
+
 `commands` is a complete replacement snapshot for the active terminal agent's
 Chat View slash-command menu. Names omit the leading `/`. The daemon owns this
 agent-specific catalog so desktop and mobile clients do not maintain divergent
@@ -715,6 +730,16 @@ is a bounded UI read rather than general filesystem access: `source` and
 `session` must resolve to hook-written session state, and the workspace root is
 always taken from that state. Callers cannot supply a path to scan. `limit`
 defaults to 20 and is capped at 50.
+
+`kind=files` lists the session cwd's subtree (git's index in a repo, so
+`.gitignore` applies) and returns it fuzzy-ranked, best first: every
+whitespace-separated word must match as a subsequence, preferring the file
+name, word boundaries and camelCase humps; words of 5+ letters forgive one
+typo (two from 8), so `mian.rs` finds `main.rs`; and files modified lately
+rank above otherwise comparable matches. Clients should show the items in
+the order given rather than re-filter them by substring. The listing is
+cached for a few seconds per workspace, so a file created just now can take
+one refresh to appear.
 
 ```jsonc
 // kind=commands
@@ -1143,7 +1168,8 @@ instruction in the same request:
 ```
 
 `pastedText` accepts up to 16 nonempty blocks. Each is delivered as bracketed
-paste before `text`; one final Enter submits the whole message. With
+paste before `text`, and `text` starts on a new line after them; one final
+Enter submits the whole message. With
 `textMode: "typed"`, the instruction is written once without paste markers;
 line breaks use Meta-Enter to avoid submitting early. Native agents may still
 classify large writes as pasted input. Omitting `textMode` preserves the
@@ -1194,6 +1220,43 @@ separate terminal events. Free-form text is rejected — it belongs to
 // response
 { "ok": true, "source": "claude", "sessionId": "agent-session-id" }
 ```
+
+### `POST /v1/rewind[?<session lookup>]`
+
+Rewinds a Claude session to just before one of its prompts, as Claude's own
+`/rewind` (Esc Esc) does, with the same dual pane resolution as `/v1/keys`.
+Every step is read off the live screen before the next key: the daemon
+refuses unless Claude is idle with an empty input (a placeholder counts as
+input: a capture can't tell them apart), walks the rewind list up one row at a
+time, and opens every row that may be the prompt to read the prompt its
+confirmation quotes. Text matches with case kept and whitespace ignored;
+`occurrence` counts newer prompts with the same text, skipped the same way.
+Claude quotes at most four lines of a prompt (a long line wrapped and cut), so
+when a match rests on a cut quote the daemon checks the rest of the list and
+refuses if another prompt also starts that way.
+It picks the restore option by its label, waits for the restore to finish,
+then clears the prompt Claude puts back in its input so a later `/v1/prompt`
+isn't appended to it; `inputCleared` is false when that didn't work. On any
+mismatch, or a request cancelled midway, it backs out of the picker. The
+transcript forks when the next prompt is sent, not at the rewind.
+
+`restore` is `conversation` or `code-and-conversation` (only offered for a
+prompt whose turn edited files).
+
+```jsonc
+// request
+{ "source": "claude", "sessionId": "agent-session-id",
+  "prompt": "the prompt's full text", "occurrence": 0, "restore": "conversation" }
+
+// response
+{ "ok": true, "source": "claude", "sessionId": "agent-session-id", "inputCleared": true }
+```
+
+Errors: `400` invalid body or a non-Claude source; `409` Claude is working,
+its input holds a draft, the prompt isn't in the rewind list (a branch already
+rewound past it), another prompt starts the same way (a cut quote can't
+tell them apart), the prompt has no code changes to restore, the screen
+didn't match, or the restore didn't finish in time (check the terminal); `404`/`422` as `/v1/keys`.
 
 ### `GET /v1/muxes`
 
@@ -1500,6 +1563,18 @@ Zellij response:
 {
   "kind": "zellij",
   "zellij": { "session": "work", "pane": "terminal_7" },
+  "cwd": "/Users/me/projects/foo",
+  "git": { "repo": "/Users/me/projects/foo", "branch": "main", "dirty": true }
+}
+```
+
+Mux-driver response (tern, TUIOS, and any multiplexer added through `internal/mux`; see [mux-drivers.md](internal/mux-drivers.md)). Every driver kind uses the same `mux` block; `session` is omitted where the multiplexer has no session names (tern), and `agent` comes from the hook-recorded binding of that pane:
+
+```json
+{
+  "kind": "tern",
+  "mux": { "window": "2", "pane": "3", "title": "claude: fix the build" },
+  "agent": { "name": "claude", "source": "claude", "session": "live-1", "pane": "3" },
   "cwd": "/Users/me/projects/foo",
   "git": { "repo": "/Users/me/projects/foo", "branch": "main", "dirty": true }
 }

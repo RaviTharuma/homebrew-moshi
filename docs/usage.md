@@ -375,7 +375,7 @@ Events from these commands share the host's push rate limit with agents
 
 | Agent | Managed file |
 |---|---|
-| Claude Code | `$CLAUDE_CONFIG_DIR/settings.json` or `~/.claude/settings.json`; `.claude/settings.local.json` with `--local` |
+| Claude Code | `$CLAUDE_CONFIG_DIR/settings.json` or `~/.claude/settings.json`, plus the `moshi-plugin/` folder beside it, listed in that file's `env.CLAUDE_CODE_PLUGIN_DIRS`; `.claude/settings.local.json` with `--local` (no plugin) |
 | Codex | `$CODEX_HOME/hooks.json` plus `$CODEX_HOME/config.toml` feature flag, or `~/.codex/...` |
 | OpenCode | `$OPENCODE_CONFIG_DIR/plugins/moshi-hooks.ts`, `$XDG_CONFIG_HOME/opencode/plugins/moshi-hooks.ts`, or `~/.config/opencode/plugins/moshi-hooks.ts`; `.opencode/plugins/moshi-hooks.ts` with `--local` |
 | Gemini CLI | `~/.gemini/settings.json` |
