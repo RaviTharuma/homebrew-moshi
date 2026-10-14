@@ -124,7 +124,7 @@ Every frame uses the same shape. Fields are optional, interpreted per `type`. Un
   "category": "shell",
   "cwd": "/Users/jyo/projects/foo",
   "projectName": "foo",
-  "terminalKind": "zellij",              // "tmux" | "zellij" | "herdr"
+  "terminalKind": "zellij",              // "tmux" | "zellij" | "herdr" | a mux driver kind
   "zellijSession": "main",
   "zellijPane": "terminal_1",
   "herdrSession": "main",
@@ -133,6 +133,12 @@ Every frame uses the same shape. Fields are optional, interpreted per `type`. Un
   "tmuxWindow": "0",
   "tmuxPane": "%7",
   "tmuxSocket": "/private/tmp/tmux-501/default", // server socket; forwarded in pushes
+  "muxSession": "work",                  // mux drivers (terminalKind "tern", "tuios", …):
+  "muxWindow": "0",                      //   one set of fields for every driver-backed
+  "muxPane": "7e02c7a1-…",               //   multiplexer; which are set depends on it
+  "muxSocket": "/tmp/tuios-501/tuios.sock",
+  "muxEnv": {"TERN_PANE": "5"},          // in-process plugins only: driver env the daemon
+                                         //   detects from on intake; never forwarded
   "toolName": "Bash",
   "modelName": "claude-opus-4-7",
   "contextPercent": 42,                  // 0..100, 0 = unknown
@@ -472,6 +478,10 @@ suppress_push_while_unlocked = false
 # off, behind counts are as of your own last fetch.
 #   moshi-hook set git-background-fetch on
 git_background_fetch = false
+# macOS only: run the bundled mata host so Moshi can stream and control
+# simulators and emulators. Applies after a daemon restart.
+#   moshi-hook set mata off
+mata = true
 # Optional HTTP probe allowlist for Browser Preview discovery. Omit it (or use
 # "all") to scan every eligible loopback listener. An empty array disables
 # HTTP probing entirely. Entries are single ports or inclusive "lo-hi" ranges,
@@ -508,6 +518,7 @@ See `docs/design/client-mode.md` for the full design. Bare `moshi` serves the em
 
 - The built app-moshi assets (populate with `scripts/build-webapp.sh`) are served by the foreground web listener on `127.0.0.1:24544`; extensionless paths fall back to the SPA shell. `/gateway/*`, `/events`, `/hosts/*`, `/v1/*`, and `/apps/*` proxy to the daemon at `127.0.0.1:24543`, preserving same-origin HTTP and WebSocket behavior. Ctrl-C stops the web listener without stopping agent hooks.
 - `/hosts/<name>/<rest>` reverse-proxies `<rest>` (HTTP and WebSocket) to `127.0.0.1:24543` on `<name>` via `ssh -W` with `ControlMaster` reuse. `<name>` is any syntactically safe ssh destination (optional `user@` + hostname — config aliases and MagicDNS names alike; the daemon reads no ssh config of its own, clients remember their own host lists); unsafe names are `404`, ssh failures are `502` with the last ssh stderr line included (e.g. `Permission denied (publickey)`). BatchMode is forced: hosts needing interactive auth (passwords, locked agents like 1Password) fail fast — verify with plain `ssh <name>` first.
+- `GET /v1/pty?mux=<driver kind>[&muxSession=<name>]` attaches a mux driver's client for multiplexers that have one (TUIOS: `tuios attach -c <name>`, or the most recent session without a name); `pane=` is rejected for them, and an unknown or non-attachable kind answers 400 naming the attachable ones. See [mux-drivers.md](internal/mux-drivers.md).
 - `GET /v1/pty?mux=herdr&hideSidebar=true` sets `[ui] sidebar_collapsed_mode = "hidden"` in the host’s shared Herdr config and reloads the selected session before attaching; `false` sets `"compact"`. This affects other clients using that config and only changes the collapsed rail: collapse the sidebar in Herdr to hide it. Omit the parameter to leave configuration untouched. Requires a Herdr version supporting `sidebar_collapsed_mode` (no `--hide-sidebar` flag); works on macOS, Linux and Windows. Respects `HERDR_CONFIG_PATH` and `XDG_CONFIG_HOME` (else `%APPDATA%` on Windows). For SSH hosts the remote moshi-hook applies it via `POST /v1/herdr/sidebar` (older remote daemons: the attach proceeds unchanged and POST reports the hook is too old). A failed config update never blocks the attach. POST to the same URL applies the setting and reloads config without opening or closing a PTY. The app uses POST when the preference changes, including for parked terminals. Use your Herdr prefix followed by B (or your custom sidebar binding) to collapse or expand.
 - `POST /v1/herdr/sidebar?mode=hidden|compact[&muxSession=<name>]` applies that collapsed rail mode to this daemon's own Herdr config and reloads the session (204; 422 with `error` on failure). Remote gateways call it over the SSH bridge before a remote attach.
 - `GET /v1/pty?mux=tmux:<server>[&muxSession=…][&pane=…]` attaches to a non-default tmux server — pass the `GET /v1/muxes` id as `mux`. Locally the server must be one the daemon lists (it attaches with `-S <socket>`; unknown servers are `422`); with `host=` the remote tmux resolves it (`-L <name>` or `-S <path>`).
@@ -654,6 +665,7 @@ which also wakes the agent watch:
     "planMenu": { "title": "Implement this plan?", "options": ["Approve", "Keep planning"] },
     "pendingPrompt": { "kind": "question", "toolUseId": "…", "questions": [ /* … */ ] },
     "pendingPromptAt": 1787219608.6,
+    "promptSuggestion": "run the tests you just wrote",
     "pendingApproval": {
       "actionId": "122fa92b…",
       "title": "Bash command",
@@ -689,6 +701,13 @@ dialogs too. Answer it via `POST /v1/approvals/answer`
 (capability `approvals.answer`); the frame drops the field within a tick of
 the dialog resolving, however it was answered.
 
+`promptSuggestion` (Claude only) is the agent's own guess at the next prompt:
+the dim text its TUI shows in the empty prompt box after a turn, which → or
+Tab takes. It is the exact text the terminal shows, forwarded by the moshi
+Claude plugin, and present only while the agent is idle and the terminal still
+offers it: the next submitted prompt, `/clear`, or typing in the terminal's
+prompt box drops it. Sending it is an ordinary prompt submission.
+
 `commands` is a complete replacement snapshot for the active terminal agent's
 Chat View slash-command menu. Names omit the leading `/`. The daemon owns this
 agent-specific catalog so desktop and mobile clients do not maintain divergent
@@ -711,6 +730,16 @@ is a bounded UI read rather than general filesystem access: `source` and
 `session` must resolve to hook-written session state, and the workspace root is
 always taken from that state. Callers cannot supply a path to scan. `limit`
 defaults to 20 and is capped at 50.
+
+`kind=files` lists the session cwd's subtree (git's index in a repo, so
+`.gitignore` applies) and returns it fuzzy-ranked, best first: every
+whitespace-separated word must match as a subsequence, preferring the file
+name, word boundaries and camelCase humps; words of 5+ letters forgive one
+typo (two from 8), so `mian.rs` finds `main.rs`; and files modified lately
+rank above otherwise comparable matches. Clients should show the items in
+the order given rather than re-filter them by substring. The listing is
+cached for a few seconds per workspace, so a file created just now can take
+one refresh to appear.
 
 ```jsonc
 // kind=commands
@@ -898,6 +927,16 @@ files and non-Git directories included. Clients refetch everything on
 `repository` and only file listings on `tree`. Listed folders are polled by
 directory mtime (no file descriptors are held), at most 256 per root.
 
+`/apps/diff/:sessionId/api/source/files` lists every file under the root in
+one response, for a client's quick open to fuzzy-match locally:
+`{"files": ["src/main.go", …], "root": "/abs/root", "truncated": false}`,
+relative and slash-separated. In a Git work tree it is `git ls-files --cached
+--others --exclude-standard` (tracked files plus untracked ones `.gitignore`
+keeps); a non-Git directory is walked, skipping `node_modules`, `vendor`,
+`dist`, `build`, `target`, `.next`, `.cache` and VCS directories. The Files
+exclude patterns apply to every path segment. The list stops at 200,000 files
+(a walk at 400,000 entries) with `"truncated": true`.
+
 ### `POST /v1/questions/answer`
 
 Submits a complete Chat View answer form to the live Claude Code, Codex, Cursor,
@@ -935,7 +974,17 @@ answer.
 ```
 
 Option indexes are zero-based. Every question must have at least one selection;
-single-select questions require exactly one. Codex does not support
+single-select questions require exactly one.
+
+Claude Code and OMP answers may carry free text instead (capability
+`questions.text`): `{ "optionIndexes": [], "text": "Something else" }`. The
+bridge types it into the form's own text row, Claude's "Type something" or
+OMP's "Other (type your own)", flattened to one line and at most 4096 bytes.
+A single-select answer is either an option or text; a multi-select answer may
+add text to its options. Text is refused with `400` when the visible question
+draws no such row; for Claude also for a preview question and for a
+multi-question form the hook did not capture (later tabs cannot be checked).
+Other harnesses take options only. Codex does not support
 multi-select questions. Herdr uses the same harness-specific answer sequence;
 the bridge translates it through `herdr pane send-keys` after resolving and
 verifying the focused pane.
@@ -947,7 +996,12 @@ same verified TUI bridge. It supports Claude Code, Codex, Kimi, Pi, OMP, and
 OpenCode. The app sends the complete
 visible menu and the plan markdown, not a raw key. The daemon verifies the
 agent session, menu title, every numbered option label, and a visible
-fingerprint from the plan before it selects anything. As with question
+fingerprint from the plan before it selects anything. OMP's plan review menu
+is unnumbered and skips rows it has disabled, so for OMP the bridge moves the
+cursor one row at a time, re-reading where it landed, and refuses an option it
+cannot reach; the OMP extension records the plan card when the review opens
+(its `write` to `xd://propose`) and retires it on the next turn, session
+switch or exit. As with question
 answers, the session-lookup params are optional for loopback callers, which
 resolve the pane and captured prompt from the recorded agent state instead.
 
@@ -1114,7 +1168,8 @@ instruction in the same request:
 ```
 
 `pastedText` accepts up to 16 nonempty blocks. Each is delivered as bracketed
-paste before `text`; one final Enter submits the whole message. With
+paste before `text`, and `text` starts on a new line after them; one final
+Enter submits the whole message. With
 `textMode: "typed"`, the instruction is written once without paste markers;
 line breaks use Meta-Enter to avoid submitting early. Native agents may still
 classify large writes as pasted input. Omitting `textMode` preserves the
@@ -1165,6 +1220,43 @@ separate terminal events. Free-form text is rejected — it belongs to
 // response
 { "ok": true, "source": "claude", "sessionId": "agent-session-id" }
 ```
+
+### `POST /v1/rewind[?<session lookup>]`
+
+Rewinds a Claude session to just before one of its prompts, as Claude's own
+`/rewind` (Esc Esc) does, with the same dual pane resolution as `/v1/keys`.
+Every step is read off the live screen before the next key: the daemon
+refuses unless Claude is idle with an empty input (a placeholder counts as
+input: a capture can't tell them apart), walks the rewind list up one row at a
+time, and opens every row that may be the prompt to read the prompt its
+confirmation quotes. Text matches with case kept and whitespace ignored;
+`occurrence` counts newer prompts with the same text, skipped the same way.
+Claude quotes at most four lines of a prompt (a long line wrapped and cut), so
+when a match rests on a cut quote the daemon checks the rest of the list and
+refuses if another prompt also starts that way.
+It picks the restore option by its label, waits for the restore to finish,
+then clears the prompt Claude puts back in its input so a later `/v1/prompt`
+isn't appended to it; `inputCleared` is false when that didn't work. On any
+mismatch, or a request cancelled midway, it backs out of the picker. The
+transcript forks when the next prompt is sent, not at the rewind.
+
+`restore` is `conversation` or `code-and-conversation` (only offered for a
+prompt whose turn edited files).
+
+```jsonc
+// request
+{ "source": "claude", "sessionId": "agent-session-id",
+  "prompt": "the prompt's full text", "occurrence": 0, "restore": "conversation" }
+
+// response
+{ "ok": true, "source": "claude", "sessionId": "agent-session-id", "inputCleared": true }
+```
+
+Errors: `400` invalid body or a non-Claude source; `409` Claude is working,
+its input holds a draft, the prompt isn't in the rewind list (a branch already
+rewound past it), another prompt starts the same way (a cut quote can't
+tell them apart), the prompt has no code changes to restore, the screen
+didn't match, or the restore didn't finish in time (check the terminal); `404`/`422` as `/v1/keys`.
 
 ### `GET /v1/muxes`
 
@@ -1325,11 +1417,24 @@ contract: `agent.focus` for agent panes, and a bounded neighbor-by-neighbor
 focus walk toward shell panes; a walk that cannot reach the pane reports the
 `not-an-agent-pane` fallback reason.
 
-### `GET /v1/transcripts?session=<id>[&source=claude|codex|cursor|grok|opencode|hermes|pi|omp|omo|kimi|antigravity|qoder|devin|copilot|amp|droid|jcode|goose][&limit=<n>][&cursor=<opaque>]`
+### `GET /v1/transcripts?session=<id>[&source=claude|codex|cursor|grok|opencode|hermes|pi|omp|omo|kimi|antigravity|qoder|devin|copilot|amp|droid|jcode|goose][&limit=<n>][&cursor=<opaque>][&subagents=1][&agent=<agentId>]`
 
 Opens a local WebSocket stream for a live agent transcript. New clients should pass `source`; when omitted for backward compatibility, the gateway tries Claude first, then Codex. Claude transcripts prefer the exact per-session path captured from hook events (including `CLAUDE_CONFIG_DIR` profiles), then fall back to `~/.claude/projects` for older session state. Codex transcripts are resolved from `$CODEX_HOME/sessions` or `~/.codex/sessions` rollout files. Cursor resolves its native `~/.cursor/chats/<workspace>/<conversation-id>/store.db` and streams role-bearing message blobs in insertion order, polling the live SQLite store for appended messages. Grok streams the authoritative ACP `updates.jsonl` reported by its hooks, with a `$GROK_HOME/sessions/<encoded-cwd>/<session-id>/` scan as a fallback for older sessions. Completed Grok `image_gen` results are exposed as lazy ACP image blocks backed by the generated file, so Chat View can render them without terminal graphics support. Pi and OMP transcripts use the exact JSONL path reported by the installed extension, so profiles and custom session locations work without a directory scan. OMP validation understands its v3 fixed-width title slot before the session header. Kimi transcripts resolve through its profile-aware `session_index.jsonl` and stream the main agent's live `wire.jsonl`. Qoder writes Claude-format JSONL, so it reuses the Claude reader: the exact path from its hooks wins, with `$QODER_CONFIG_DIR/projects` or `~/.qoder/projects` as the fallback search root. Devin CLI keeps each session as one ATIF JSON document under `$XDG_DATA_HOME/devin/cli/transcripts/<id>.json` (default `~/.local/share/devin/cli/transcripts`); the gateway reloads it on each poll and converts its steps into Claude-shaped `user`/`assistant` rows (tool calls become `tool_use`, observations `tool_result`), so clients reuse their Claude reducer. GitHub Copilot CLI appends session events to `$COPILOT_HOME/session-state/<id>/events.jsonl` (default `~/.copilot`); the gateway keeps `user.message`, `assistant.message` and `tool.execution_complete` rows and rewrites them into Claude-shaped rows (built-in tools renamed to Read/Edit/Write/Bash/Grep). Amp keeps threads on its servers: the gateway runs `amp threads export <id>` while a stream is open and converts the messages into Claude-shaped rows. The Moshi Amp plugin touches `<state>/amp-activity/<thread>` on each turn and tool result; the poll only stats that marker and re-exports when it moved (or every 30s), sharing one cached export across viewers. Factory Droid transcripts resolve from the exact path its hooks report (fallback `~/.factory/sessions/*/<id>.jsonl`); the filter unwraps its Claude-compatible `message` rows and drops TUI-only rows (`visibility: "user_only"`) and `context-*` system reminders. OpenCode is proxied through the live local server recorded by its plugin. Transcript bytes stay on the host and are streamed only over the local forwarded gateway. If Codex resume creates a newer rollout for the same session id, reconnect to resolve the newest file.
 
-Server messages are JSON objects with `type` (`backlog`, `older`, `append`, `resumed`, `reset`, or `error`), `source`, physical `line` numbers, and raw JSONL rows for client-side rendering. Clients can request older rows with `{"type":"older","beforeLine":123,"limit":50}`.
+Server messages are JSON objects with `type` (`backlog`, `older`, `append`, `resumed`, `reset`, `subagents`, or `error`), `source`, physical `line` numbers, and raw JSONL rows for client-side rendering. Clients can request older rows with `{"type":"older","beforeLine":123,"limit":50}`.
+
+**Subagents** (capability `transcripts.subagents`; Claude and Qoder, which share Claude's on-disk layout). Claude Code writes each subagent's rows to `<session>/subagents/agent-<id>.jsonl` beside the parent JSONL, never into it. A parent stream opened with `subagents=1` sends one `subagents` message right after the opening `backlog` (or `resumed` on reconnect), then another whenever the list or any status changes:
+
+```json
+{"source":"claude","type":"subagents","subagents":[
+  {"agentId":"a050b064e698baa29","toolUseId":"toolu_01Qz…","name":"tiles-composer",
+   "description":"Comments, images, voice tiles","agentType":"fork","status":"running",
+   "startedAt":"2026-10-08T06:08:50.936Z","updatedAt":"2026-10-08T06:15:34.991Z"}]}
+```
+
+Each message is the full list and replaces the previous one; an absent `subagents` field means none. It is independent of row framing: it carries no cursor, may arrive before the `append` that caused it, and `reset`/`backlog` do not clear it. `toolUseId` matches the parent's `Agent`/`Task` `tool_use` block, so Chat View can attach the subagent to that card. `teammate` marks in-process team members. `status` is `running`, `idle` (a teammate whose last turn ended, read from its transcript tail, or quiet for a minute when the tail can't tell; teammates wait on a mailbox and never report completion), or the parent's last `<task-notification>` / tool-result outcome: `completed`, `failed`, `killed`, or `stopped`. A finished agent that writes again (resumed by `SendMessage`) goes back to `running`. `hidden: true` mirrors Claude Code's own agent list, which drops an agent 30 s after it goes idle or finishes: leave it out of the tab strip but keep it reachable (an already-open tab, a switcher). It is omitted while false, so older daemons show everything. The daemon derives all of this from the whole parent file plus `subagents/*.meta.json`, so it covers agents spawned before the loaded page. The layout is internal to Claude Code: when it is missing, the list is empty, never an error. Without `subagents=1` the stream is unchanged.
+
+`agent=<agentId>` opens that subagent's own transcript instead of the parent's, with the same protocol (`limit`, `cursor`, `older`, Claude row filter). Its rows carry `isSidechain: true`; forks begin with a `fork-context-ref` row pointing at the parent context. Cursors are bound to the agent, so a parent cursor falls back to a full `backlog`. An invalid id, or `agent` on a source without subagents, is `400`; an unknown agent is `404`. `/v1/transcripts/blob` accepts the same `agent` parameter for images in subagent rows.
 
 The optional `limit` query parameter shrinks the opening `backlog` page, which matters on long-haul links where the default 200-row page costs several round trips of TCP slow start. It counts **kept source rows** — the physical rows the daemon streams — not rendered chat messages; several source rows routinely collapse into one message, so a client asking for 30 rows should expect noticeably fewer. Values that are missing, unparseable, non-positive, or above the 200-row default are ignored and produce exactly the default page, so older clients are unaffected. `startLine`, `totalLines`, and `hasMore` stay physical and correct, so paging back with `older` converges on the same history as an unlimited backlog. `limit` applies to every `backlog` message on the connection, including the one re-sent after a `reset`.
 
@@ -1339,7 +1444,7 @@ The optional `cursor` resumes a previously committed transcript checkpoint. Curs
 
 A `cursor` on an `append` is the **commit marker for the entire burst**, including preceding cursorless fragments. Buffer those fragments and reduce them only after the commit marker arrives. On disconnect, discard uncommitted fragments and resume from the last committed cursor. Never use `totalLines` as a checkpoint: every fragment may report the final total before all rows have arrived. Persist the cursor and corresponding reducer inputs together. `resumed` completes catch-up without changing the oldest loaded boundary or older-page availability. `older` responses never advance the forward cursor. Materialized `backlog` responses carry a cursor; virtual pending rows do not. A cursorless backlog is still authoritative and requires a full refresh. Mutable OpenCode rows can invalidate an earlier prefix, so an active-turn reconnect may legitimately require a full refresh.
 
-### `GET /v1/transcripts/blob?session=<id>&line=<n>[&block=<i>][&source=claude|codex|cursor|grok|opencode|hermes|pi|omp|omo|kimi|antigravity|qoder|devin|copilot|amp|droid|jcode|goose]`
+### `GET /v1/transcripts/blob?session=<id>&line=<n>[&block=<i>][&source=claude|codex|cursor|grok|opencode|hermes|pi|omp|omo|kimi|antigravity|qoder|devin|copilot|amp|droid|jcode|goose][&agent=<agentId>]`
 
 Serves the raw image bytes of one content block of one transcript line, re-read from disk or re-fetched from OpenCode on demand (so redaction never loses data). `line` is the physical transcript line index reported by the stream; `block` (default 0) indexes `message.content[i]` for Claude/Pi/OMP, including a Claude `tool_result` whose content contains an image; ACP `update.content[i]` for Grok; `event.result.output[i]` for Kimi; `payload.content[i]` / `payload.output[i]` for Codex; or the flattened OpenCode image attachments. Grok's synthetic Imagine blocks map back to `rawInput.image[i]` or `rawOutput.path`; OMP `blob:sha256:` references resolve through the profile/XDG-aware `blobs/` directory beside its managed `sessions/` tree; Kimi `blobref:<mime>;<sha256>` references resolve through the `blobs/` directory beside its main-agent `wire.jsonl`. For Codex `view_image` function calls the endpoint resolves the call's absolute file `path` on the host and serves the file when it sniffs as an image (capped at 32 MB). Responds with the image `Content-Type` and cache headers; returns 404 when the addressed block is not an image.
 
@@ -1458,6 +1563,18 @@ Zellij response:
 {
   "kind": "zellij",
   "zellij": { "session": "work", "pane": "terminal_7" },
+  "cwd": "/Users/me/projects/foo",
+  "git": { "repo": "/Users/me/projects/foo", "branch": "main", "dirty": true }
+}
+```
+
+Mux-driver response (tern, TUIOS, and any multiplexer added through `internal/mux`; see [mux-drivers.md](internal/mux-drivers.md)). Every driver kind uses the same `mux` block; `session` is omitted where the multiplexer has no session names (tern), and `agent` comes from the hook-recorded binding of that pane:
+
+```json
+{
+  "kind": "tern",
+  "mux": { "window": "2", "pane": "3", "title": "claude: fix the build" },
+  "agent": { "name": "claude", "source": "claude", "session": "live-1", "pane": "3" },
   "cwd": "/Users/me/projects/foo",
   "git": { "repo": "/Users/me/projects/foo", "branch": "main", "dirty": true }
 }
